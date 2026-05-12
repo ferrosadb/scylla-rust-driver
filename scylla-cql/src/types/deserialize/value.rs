@@ -287,14 +287,38 @@ impl_strict_type!(
     },
     'a
 );
-impl_strict_type!(
-    Vec<u8>,
-    Blob,
-    |typ: &'metadata ColumnType<'metadata>, v: Option<FrameSlice<'frame>>| {
+// Accept Blob *or* the Cassandra `Custom("VectorType(...)")` marshaller
+// for `Vec<u8>` deserialization. CEP-30 vectors carry packed fixed-size
+// big-endian elements with no per-element length prefix — exactly the
+// byte layout a Rust consumer can unpack into the desired primitive
+// type (e.g. via `bytemuck` or manual `f32::from_be_bytes`). Mirrors
+// the symmetric `SerializeValue` accept in `types/serialize/value.rs`.
+impl<'frame, 'metadata> DeserializeValue<'frame, 'metadata> for Vec<u8> {
+    fn type_check(typ: &ColumnType) -> Result<(), TypeCheckError> {
+        match typ {
+            ColumnType::Blob => Ok(()),
+            ColumnType::Custom(class)
+                if class.starts_with("org.apache.cassandra.db.marshal.VectorType(") =>
+            {
+                Ok(())
+            }
+            _ => Err(mk_typck_err::<Self>(
+                typ,
+                BuiltinTypeCheckErrorKind::MismatchedType {
+                    expected: &[ColumnType::Blob],
+                },
+            )),
+        }
+    }
+
+    fn deserialize(
+        typ: &'metadata ColumnType<'metadata>,
+        v: Option<FrameSlice<'frame>>,
+    ) -> Result<Self, DeserializationError> {
         let val = ensure_not_null_slice::<Self>(typ, v)?;
         Ok(val.to_vec())
     }
-);
+}
 impl_strict_type!(
     Bytes,
     Blob,

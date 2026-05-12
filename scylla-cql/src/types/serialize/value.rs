@@ -285,7 +285,7 @@ impl SerializeValue for &str {
 }
 impl SerializeValue for Vec<u8> {
     impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Blob);
+        blob_or_cassandra_vector_typeck::<Self>(typ)?;
         writer
             .set_value(me.as_ref())
             .map_err(|_| mk_ser_err::<Self>(typ, BuiltinSerializationErrorKind::SizeOverflow))?
@@ -293,7 +293,7 @@ impl SerializeValue for Vec<u8> {
 }
 impl SerializeValue for &[u8] {
     impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Blob);
+        blob_or_cassandra_vector_typeck::<Self>(typ)?;
         writer
             .set_value(me)
             .map_err(|_| mk_ser_err::<Self>(typ, BuiltinSerializationErrorKind::SizeOverflow))?
@@ -301,11 +301,42 @@ impl SerializeValue for &[u8] {
 }
 impl<const N: usize> SerializeValue for [u8; N] {
     impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Blob);
+        blob_or_cassandra_vector_typeck::<Self>(typ)?;
         writer
             .set_value(me.as_ref())
             .map_err(|_| mk_ser_err::<Self>(typ, BuiltinSerializationErrorKind::SizeOverflow))?
     });
+}
+
+/// Accept `Blob` *or* the Cassandra `Custom("...VectorType(<inner>, <dim>)")`
+/// marshaller for `Vec<u8>` / `&[u8]` / `[u8; N]` bindings.
+///
+/// Cassandra 5.0 (CEP-30) advertises `vector<inner, dim>` over the native
+/// protocol as a `Custom` type. The wire format for a vector cell is
+/// exactly `dim` fixed-size big-endian elements with no per-element length
+/// prefix, which is the same byte layout an application produces when it
+/// packs its own embedding into a `Vec<u8>`. Treating the byte slice as a
+/// valid binding for a vector column lets clients write embeddings without
+/// a parallel `Vec<f32>` API surface; the read side already returns
+/// `CqlValue::List<CqlValue::Float>` (see `parse_cassandra_vector_type` in
+/// `frame/response/result.rs`).
+fn blob_or_cassandra_vector_typeck<T>(
+    typ: &ColumnType,
+) -> Result<(), SerializationError> {
+    match typ {
+        ColumnType::Blob => Ok(()),
+        ColumnType::Custom(class)
+            if class.starts_with("org.apache.cassandra.db.marshal.VectorType(") =>
+        {
+            Ok(())
+        }
+        _ => Err(mk_typck_err::<T>(
+            typ,
+            BuiltinTypeCheckErrorKind::MismatchedType {
+                expected: &[ColumnType::Blob],
+            },
+        )),
+    }
 }
 impl SerializeValue for IpAddr {
     impl_serialize_via_writer!(|me, typ, writer| {
