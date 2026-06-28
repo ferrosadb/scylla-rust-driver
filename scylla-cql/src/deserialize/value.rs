@@ -303,23 +303,37 @@ impl_emptiable_strict_type!(
 
 // blob
 
-impl_strict_type!(
-    &'a [u8],
-    Blob,
-    |typ: &'metadata ColumnType<'metadata>, v: Option<FrameSlice<'frame>>| {
+impl<'a, 'frame, 'metadata> DeserializeValue<'frame, 'metadata> for &'a [u8]
+where
+    'frame: 'a,
+{
+    fn type_check(typ: &ColumnType) -> Result<(), TypeCheckError> {
+        blob_or_vector_type_check::<Self>(typ)
+    }
+
+    fn deserialize(
+        typ: &'metadata ColumnType<'metadata>,
+        v: Option<FrameSlice<'frame>>,
+    ) -> Result<Self, DeserializationError> {
         let val = ensure_not_null_slice::<Self>(typ, v)?;
         Ok(val)
-    },
-    'a
-);
-impl_strict_type!(
-    Vec<u8>,
-    Blob,
-    |typ: &'metadata ColumnType<'metadata>, v: Option<FrameSlice<'frame>>| {
+    }
+}
+
+impl<'frame, 'metadata> DeserializeValue<'frame, 'metadata> for Vec<u8> {
+    fn type_check(typ: &ColumnType) -> Result<(), TypeCheckError> {
+        blob_or_vector_type_check::<Self>(typ)
+    }
+
+    fn deserialize(
+        typ: &'metadata ColumnType<'metadata>,
+        v: Option<FrameSlice<'frame>>,
+    ) -> Result<Self, DeserializationError> {
         let val = ensure_not_null_slice::<Self>(typ, v)?;
         Ok(val.to_vec())
     }
-);
+}
+
 impl_strict_type!(
     Bytes,
     Blob,
@@ -1850,6 +1864,18 @@ macro_rules! exact_type_check {
     };
 }
 use exact_type_check;
+
+fn blob_or_vector_type_check<T>(typ: &ColumnType) -> Result<(), TypeCheckError> {
+    match typ {
+        ColumnType::Native(NativeType::Blob) | ColumnType::Vector { .. } => Ok(()),
+        _ => Err(mk_typck_err::<T>(
+            typ,
+            BuiltinTypeCheckErrorKind::MismatchedType {
+                expected: &[ColumnType::Native(NativeType::Blob)],
+            },
+        )),
+    }
+}
 
 /// Describes why type checking some of the built-in types failed.
 #[derive(Debug, Clone)]
