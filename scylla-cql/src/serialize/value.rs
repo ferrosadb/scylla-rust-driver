@@ -71,6 +71,18 @@ macro_rules! exact_type_check {
     };
 }
 
+fn blob_or_vector_type_check<T: ?Sized>(typ: &ColumnType) -> Result<(), SerializationError> {
+    match typ {
+        ColumnType::Native(NativeType::Blob) | ColumnType::Vector { .. } => Ok(()),
+        _ => Err(mk_typck_err::<T>(
+            typ,
+            BuiltinTypeCheckErrorKind::MismatchedType {
+                expected: &[ColumnType::Native(NativeType::Blob)],
+            },
+        )),
+    }
+}
+
 macro_rules! impl_serialize_via_writer {
     (|$me:ident, $writer:ident| $e:expr) => {
         impl_serialize_via_writer!(|$me, _typ, $writer| $e);
@@ -319,7 +331,7 @@ impl SerializeValue for str {
 }
 impl SerializeValue for Vec<u8> {
     impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Blob);
+        blob_or_vector_type_check::<Self>(typ)?;
         writer
             .set_value(me.as_ref())
             .map_err(|_| mk_ser_err::<Self>(typ, BuiltinSerializationErrorKind::SizeOverflow))?
@@ -327,7 +339,7 @@ impl SerializeValue for Vec<u8> {
 }
 impl SerializeValue for &[u8] {
     impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Blob);
+        blob_or_vector_type_check::<Self>(typ)?;
         writer
             .set_value(me)
             .map_err(|_| mk_ser_err::<Self>(typ, BuiltinSerializationErrorKind::SizeOverflow))?
@@ -335,7 +347,7 @@ impl SerializeValue for &[u8] {
 }
 impl<const N: usize> SerializeValue for [u8; N] {
     impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Blob);
+        blob_or_vector_type_check::<Self>(typ)?;
         writer
             .set_value(me.as_ref())
             .map_err(|_| mk_ser_err::<Self>(typ, BuiltinSerializationErrorKind::SizeOverflow))?

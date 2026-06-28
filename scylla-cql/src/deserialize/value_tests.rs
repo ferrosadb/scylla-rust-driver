@@ -240,10 +240,18 @@ fn test_deserialize_bytes() {
         deserialize::<Vec<u8>>(&ColumnType::Native(NativeType::Blob), &bytes).unwrap();
     let decoded_bytes =
         deserialize::<Bytes>(&ColumnType::Native(NativeType::Blob), &bytes).unwrap();
+    let vector_type = ColumnType::Vector {
+        typ: Box::new(ColumnType::Native(NativeType::TinyInt)),
+        dimensions: ORIGINAL_BYTES.len() as u16,
+    };
+    let decoded_vector_slice = deserialize::<&[u8]>(&vector_type, &bytes).unwrap();
+    let decoded_vector_vec = deserialize::<Vec<u8>>(&vector_type, &bytes).unwrap();
 
     assert_eq!(decoded_slice, ORIGINAL_BYTES);
     assert_eq!(decoded_vec, ORIGINAL_BYTES);
     assert_eq!(decoded_bytes, ORIGINAL_BYTES);
+    assert_eq!(decoded_vector_slice, ORIGINAL_BYTES);
+    assert_eq!(decoded_vector_vec, ORIGINAL_BYTES);
 
     // ser/de identity
 
