@@ -113,6 +113,12 @@ pub enum SchemaChangeEvent {
         /// List of argument types of the aggregate that was altered.
         arguments: Vec<String>,
     },
+    /// Index was altered. Same wire format as TableChange: change_type, keyspace_name, index_name.
+    IndexChange {
+        change_type: SchemaChangeType,
+        keyspace_name: String,
+        object_name: String,
+    },
 }
 
 /// Type of change that was made to the schema.
@@ -285,6 +291,17 @@ impl SchemaChangeEvent {
                 })
             }
 
+            "INDEX" => {
+                let index_name = types::read_string(buf)
+                    .map_err(SchemaChangeEventParseError::AffectedTargetNameParseError)?
+                    .to_string();
+                Ok(Self::IndexChange {
+                    change_type: type_of_change,
+                    keyspace_name: keyspace_affected,
+                    object_name: index_name,
+                })
+            }
+
             _ => Err(SchemaChangeEventParseError::UnknownTargetOfSchemaChange(
                 target.to_string(),
             )),
@@ -375,5 +392,85 @@ impl ClientRoutesChangeEvent {
             connection_ids,
             host_ids,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_string(buf: &mut Vec<u8>, s: &str) {
+        buf.extend_from_slice(&(s.len() as u16).to_be_bytes());
+        buf.extend_from_slice(s.as_bytes());
+    }
+
+    #[test]
+    fn test_deserialize_index_change_created() {
+        // SCHEMA_CHANGE event body: change_type="CREATED", target="INDEX",
+        // keyspace="ks1", index_name="idx1"
+        let mut body = Vec::new();
+        write_string(&mut body, "CREATED");
+        write_string(&mut body, "INDEX");
+        write_string(&mut body, "ks1");
+        write_string(&mut body, "idx1");
+
+        let mut buf = &body[..];
+        let event = SchemaChangeEvent::deserialize(&mut buf).unwrap();
+        match event {
+            SchemaChangeEvent::IndexChange {
+                change_type,
+                keyspace_name,
+                object_name,
+            } => {
+                assert!(matches!(change_type, SchemaChangeType::Created));
+                assert_eq!(keyspace_name, "ks1");
+                assert_eq!(object_name, "idx1");
+            }
+            other => panic!("expected IndexChange, got {:?}", other),
+        }
+        assert!(buf.is_empty(), "buffer should be fully consumed");
+    }
+
+    #[test]
+    fn test_deserialize_index_change_dropped() {
+        let mut body = Vec::new();
+        write_string(&mut body, "DROPPED");
+        write_string(&mut body, "INDEX");
+        write_string(&mut body, "my_ks");
+        write_string(&mut body, "my_idx");
+
+        let mut buf = &body[..];
+        let event = SchemaChangeEvent::deserialize(&mut buf).unwrap();
+        match event {
+            SchemaChangeEvent::IndexChange {
+                change_type,
+                keyspace_name,
+                object_name,
+            } => {
+                assert!(matches!(change_type, SchemaChangeType::Dropped));
+                assert_eq!(keyspace_name, "my_ks");
+                assert_eq!(object_name, "my_idx");
+            }
+            other => panic!("expected IndexChange, got {:?}", other),
+        }
+        assert!(buf.is_empty(), "buffer should be fully consumed");
+    }
+
+    #[test]
+    fn test_deserialize_unknown_target_still_errors() {
+        let mut body = Vec::new();
+        write_string(&mut body, "CREATED");
+        write_string(&mut body, "UNKNOWN_TARGET");
+        write_string(&mut body, "ks1");
+
+        let mut buf = &body[..];
+        let result = SchemaChangeEvent::deserialize(&mut buf);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SchemaChangeEventParseError::UnknownTargetOfSchemaChange(target) => {
+                assert_eq!(target, "UNKNOWN_TARGET");
+            }
+            other => panic!("expected UnknownTargetOfSchemaChange, got {:?}", other),
+        }
     }
 }
