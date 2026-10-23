@@ -2205,12 +2205,10 @@ where
     }
 
     async fn await_schema_agreement_indefinitely(&self) -> Result<Uuid, QueryError> {
-        loop {
-            tokio::time::sleep(self.schema_agreement_interval).await;
-            if let Some(agreed_version) = self.check_schema_agreement().await? {
-                return Ok(agreed_version);
-            }
-        }
+        poll_schema_agreement(self.schema_agreement_interval, || {
+            self.check_schema_agreement()
+        })
+        .await
     }
 
     pub async fn await_schema_agreement(&self) -> Result<Uuid, QueryError> {
@@ -2240,6 +2238,28 @@ where
     /// by default, i.e. when an executed statement does not define its own handle.
     pub fn get_default_execution_profile_handle(&self) -> &ExecutionProfileHandle {
         &self.default_execution_profile_handle
+    }
+}
+
+/// Polls `check` until every node reports the same schema version, sleeping
+/// `interval` between checks.
+///
+/// The first check runs immediately. It used to run only after a sleep, so
+/// every wait cost at least one `interval` (200 ms by default) even when the
+/// cluster already agreed, which is the common case right after a DDL on a
+/// single node. With automatic waiting on, every schema-changing statement
+/// paid that floor. The caller's `schema_agreement_timeout` still bounds the
+/// whole wait.
+async fn poll_schema_agreement<F, Fut>(interval: Duration, mut check: F) -> Result<Uuid, QueryError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Option<Uuid>, QueryError>>,
+{
+    loop {
+        if let Some(agreed_version) = check().await? {
+            return Ok(agreed_version);
+        }
+        tokio::time::sleep(interval).await;
     }
 }
 
@@ -2480,4 +2500,66 @@ fn partition_key_displayer<'ps, 'res, 'spec: 'ps>(
             Err(_) => Either::Right("<decoding error>"),
         }),
     )
+}
+
+#[cfg(test)]
+mod schema_agreement_tests {
+    use super::*;
+
+    const INTERVAL: Duration = Duration::from_millis(200);
+
+    /// The common case after a DDL on a healthy cluster: every node already
+    /// agrees. Waiting for agreement must not cost an interval.
+    #[tokio::test(start_paused = true)]
+    async fn an_agreeing_cluster_returns_without_sleeping() {
+        let version = Uuid::from_u128(7);
+        let checks = AtomicUsize::new(0);
+        let start = tokio::time::Instant::now();
+
+        let agreed = poll_schema_agreement(INTERVAL, || {
+            checks.fetch_add(1, Ordering::Relaxed);
+            async move { Ok(Some(version)) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(agreed, version);
+        assert_eq!(checks.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            start.elapsed(),
+            Duration::ZERO,
+            "slept before the first check"
+        );
+    }
+
+    /// Disagreement still waits one interval between checks, so a converging
+    /// cluster is not polled in a tight loop.
+    #[tokio::test(start_paused = true)]
+    async fn a_disagreeing_cluster_is_rechecked_once_per_interval() {
+        let version = Uuid::from_u128(7);
+        let checks = AtomicUsize::new(0);
+        let start = tokio::time::Instant::now();
+
+        let agreed = poll_schema_agreement(INTERVAL, || {
+            let n = checks.fetch_add(1, Ordering::Relaxed);
+            async move { Ok((n >= 2).then_some(version)) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(agreed, version);
+        assert_eq!(checks.load(Ordering::Relaxed), 3);
+        assert_eq!(start.elapsed(), INTERVAL * 2);
+    }
+
+    /// A failed check is returned at once, not retried.
+    #[tokio::test(start_paused = true)]
+    async fn a_failing_check_is_returned() {
+        let err = poll_schema_agreement(INTERVAL, || async {
+            Err(QueryError::RequestTimeout("probe".to_owned()))
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, QueryError::RequestTimeout(_)), "{err:?}");
+    }
 }
