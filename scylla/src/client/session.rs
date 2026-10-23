@@ -2441,28 +2441,14 @@ impl Session {
         // The future passed to timeout returns either Ok(Uuid) if agreement was
         // reached, or Err(SchemaAgreementError) if there was an error that should
         // stop the waiting before timeout.
-        let agreement_result = timeout(self.schema_agreement_timeout, async {
-            loop {
-                let result = self
-                    .check_schema_agreement_with_required_node(required_node)
-                    .await;
-                debug!("Schema agreement check result: {:?}", result);
-                match result {
-                    Ok(Some(agreed_version)) => return Ok(agreed_version),
-                    Ok(None) => last_agreement_failure = Some(Ok(())),
-                    Err(err) => {
-                        let decision = Self::classify_schema_check_error(&err);
-                        match decision {
-                            ControlFlow::Continue(_) => {
-                                last_agreement_failure = Some(Err(err));
-                            }
-                            ControlFlow::Break(_) => return Err(err),
-                        }
-                    }
-                }
-                tokio::time::sleep(self.schema_agreement_interval).await;
-            }
-        })
+        let agreement_result = timeout(
+            self.schema_agreement_timeout,
+            poll_schema_agreement(
+                self.schema_agreement_interval,
+                &mut last_agreement_failure,
+                || self.check_schema_agreement_with_required_node(required_node),
+            ),
+        )
         .await;
         match agreement_result {
             Err(_timeout) => {
@@ -2698,4 +2684,143 @@ impl ExecuteRequestContext<'_> {
 enum SchemaNodeResult {
     Success(Uuid),
     BrokenConnection(BrokenConnectionError),
+}
+
+/// Polls `check` until it reports an agreed version or a non-transient error.
+///
+/// Checks FIRST and sleeps `interval` only after a check that did not agree.
+/// Every DDL that returns SCHEMA_CHANGE runs this, and on a healthy cluster
+/// the first check already agrees, so sleeping before it would cost every DDL
+/// a full interval (200 ms by default) for nothing.
+///
+/// `last_agreement_failure` records the outcome of the last finished attempt
+/// that did not agree: `Some(Ok(()))` for disagreement, `Some(Err(_))` for a
+/// transient error. The caller reports it if its timeout fires first.
+async fn poll_schema_agreement<F, Fut>(
+    interval: Duration,
+    last_agreement_failure: &mut Option<Result<(), SchemaAgreementError>>,
+    mut check: F,
+) -> Result<Uuid, SchemaAgreementError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Option<Uuid>, SchemaAgreementError>>,
+{
+    loop {
+        let result = check().await;
+        debug!("Schema agreement check result: {:?}", result);
+        match result {
+            Ok(Some(agreed_version)) => return Ok(agreed_version),
+            Ok(None) => *last_agreement_failure = Some(Ok(())),
+            Err(err) => match Session::classify_schema_check_error(&err) {
+                ControlFlow::Continue(_) => *last_agreement_failure = Some(Err(err)),
+                ControlFlow::Break(_) => return Err(err),
+            },
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+#[cfg(test)]
+mod schema_agreement_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const INTERVAL: Duration = Duration::from_millis(200);
+
+    /// The common case after a DDL on a healthy cluster: every node already
+    /// agrees. Waiting for agreement must not cost an interval.
+    #[tokio::test(start_paused = true)]
+    async fn an_agreeing_cluster_returns_without_sleeping() {
+        let version = Uuid::from_u128(7);
+        let checks = AtomicUsize::new(0);
+        let mut last = None;
+        let start = tokio::time::Instant::now();
+
+        let agreed = poll_schema_agreement(INTERVAL, &mut last, || {
+            checks.fetch_add(1, Ordering::Relaxed);
+            async move { Ok(Some(version)) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(agreed, version);
+        assert_eq!(checks.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            start.elapsed(),
+            Duration::ZERO,
+            "slept before the first check"
+        );
+        assert!(last.is_none(), "an agreeing first check recorded a failure");
+    }
+
+    /// Disagreement still waits one interval between checks, so a converging
+    /// cluster is not polled in a tight loop.
+    #[tokio::test(start_paused = true)]
+    async fn a_disagreeing_cluster_is_rechecked_once_per_interval() {
+        let version = Uuid::from_u128(7);
+        let checks = AtomicUsize::new(0);
+        let mut last = None;
+        let start = tokio::time::Instant::now();
+
+        let agreed = poll_schema_agreement(INTERVAL, &mut last, || {
+            let n = checks.fetch_add(1, Ordering::Relaxed);
+            async move { Ok((n >= 2).then_some(version)) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(agreed, version);
+        assert_eq!(checks.load(Ordering::Relaxed), 3);
+        assert_eq!(start.elapsed(), INTERVAL * 2);
+        assert!(matches!(last, Some(Ok(()))), "{last:?}");
+    }
+
+    /// A transient error is recorded for the caller's timeout report and
+    /// retried after an interval.
+    #[tokio::test(start_paused = true)]
+    async fn a_transient_error_is_recorded_and_retried() {
+        let version = Uuid::from_u128(7);
+        let checks = AtomicUsize::new(0);
+        let mut last = None;
+        let start = tokio::time::Instant::now();
+
+        let agreed = poll_schema_agreement(INTERVAL, &mut last, || {
+            let n = checks.fetch_add(1, Ordering::Relaxed);
+            async move {
+                if n == 0 {
+                    Err(SchemaAgreementError::RequiredHostAbsent(version))
+                } else {
+                    Ok(Some(version))
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(agreed, version);
+        assert_eq!(start.elapsed(), INTERVAL);
+        assert!(
+            matches!(last, Some(Err(SchemaAgreementError::RequiredHostAbsent(_)))),
+            "{last:?}"
+        );
+    }
+
+    /// A non-transient error is returned at once, not retried.
+    #[tokio::test(start_paused = true)]
+    async fn a_non_transient_error_is_returned_at_once() {
+        let checks = AtomicUsize::new(0);
+        let mut last = None;
+        let start = tokio::time::Instant::now();
+
+        let err = poll_schema_agreement(INTERVAL, &mut last, || {
+            checks.fetch_add(1, Ordering::Relaxed);
+            async { Err(SchemaAgreementError::Timeout(INTERVAL)) }
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, SchemaAgreementError::Timeout(_)), "{err:?}");
+        assert_eq!(checks.load(Ordering::Relaxed), 1);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
 }
