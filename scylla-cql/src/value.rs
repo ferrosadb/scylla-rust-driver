@@ -675,6 +675,7 @@ pub struct CqlTimestamp(pub i64);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CqlTime(pub i64);
 
+#[cfg(feature = "chrono-04")]
 impl CqlDate {
     fn try_to_chrono_04_naive_date(&self) -> Result<chrono_04::NaiveDate, ValueOverflow> {
         let days_since_unix_epoch = self.0 as i64 - (1 << 31);
@@ -713,6 +714,7 @@ impl TryInto<chrono_04::NaiveDate> for CqlDate {
     }
 }
 
+#[cfg(feature = "chrono-04")]
 impl CqlTimestamp {
     fn try_to_chrono_04_datetime_utc(
         &self,
@@ -1253,6 +1255,117 @@ impl CqlValue {
 
 /// Displays a CqlValue. The syntax should resemble the CQL literal syntax
 /// (but no guarantee is given that it's always the same).
+/// Dependency-free proleptic Gregorian calendar arithmetic used by the
+/// `Display` impl of [`CqlValue`] for `date` and `timestamp` values.
+///
+/// The output format and the representable range reproduce exactly what the
+/// previous chrono 0.4 based implementation printed (`NaiveDate`'s `Display`
+/// and `DateTime<Utc>::format("%Y-%m-%d %H:%M:%S%.3f%z")`), so that `Display`
+/// does not require the optional `chrono-04` dependency.
+mod civil {
+    use std::fmt;
+
+    /// Smallest year representable by chrono 0.4 `NaiveDate`.
+    const MIN_YEAR: i64 = -262_143;
+    /// Largest year representable by chrono 0.4 `NaiveDate`.
+    const MAX_YEAR: i64 = 262_142;
+
+    const MILLIS_PER_SECOND: i64 = 1_000;
+    const SECONDS_PER_DAY: i64 = 86_400;
+
+    /// A date in the proleptic Gregorian calendar, within chrono's range.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(super) struct CivilDate {
+        year: i64,
+        month: u8,
+        day: u8,
+    }
+
+    impl CivilDate {
+        /// Converts days since 1970-01-01 to a civil date.
+        ///
+        /// Returns `None` when the year falls outside of chrono 0.4's
+        /// `NaiveDate` range. Uses Howard Hinnant's `civil_from_days`
+        /// algorithm; it is exact for every `i64` input whose shifted value
+        /// does not overflow, and callers pass at most ~1.1e11 days.
+        pub(super) fn from_days_since_unix_epoch(days: i64) -> Option<Self> {
+            // Shift the epoch to 0000-03-01, so that leap days end a year.
+            let z = days.checked_add(719_468)?;
+            let era = z.div_euclid(146_097);
+            let doe = z.rem_euclid(146_097); // [0, 146096]
+            let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+            let mp = (5 * doy + 2) / 153; // [0, 11], March-based month
+            let day = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+            let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+            let year = yoe + era * 400 + i64::from(month <= 2);
+            debug_assert!((1..=12).contains(&month), "month out of range: {month}");
+            debug_assert!((1..=31).contains(&day), "day out of range: {day}");
+            if !(MIN_YEAR..=MAX_YEAR).contains(&year) {
+                return None;
+            }
+            Some(Self {
+                year,
+                month: month as u8,
+                day: day as u8,
+            })
+        }
+    }
+
+    /// Formats as chrono's `NaiveDate` did: `YYYY-MM-DD` for years 0..=9999,
+    /// and an explicitly signed, zero-padded (to 5 chars) year otherwise.
+    impl fmt::Display for CivilDate {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if (0..=9999).contains(&self.year) {
+                write!(f, "{:04}", self.year)?;
+            } else {
+                write!(f, "{:+05}", self.year)?;
+            }
+            write!(f, "-{:02}-{:02}", self.month, self.day)
+        }
+    }
+
+    /// A UTC instant with millisecond precision, within chrono's range.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(super) struct CivilTimestamp {
+        date: CivilDate,
+        /// Milliseconds since midnight, in [0, 86_399_999].
+        millis_of_day: i64,
+    }
+
+    impl CivilTimestamp {
+        /// Converts milliseconds since the Unix epoch to a UTC timestamp.
+        ///
+        /// Returns `None` when the date falls outside of chrono 0.4's range.
+        pub(super) fn from_unix_millis(millis: i64) -> Option<Self> {
+            let millis_per_day = SECONDS_PER_DAY * MILLIS_PER_SECOND;
+            let days = millis.div_euclid(millis_per_day);
+            let millis_of_day = millis.rem_euclid(millis_per_day);
+            let date = CivilDate::from_days_since_unix_epoch(days)?;
+            Some(Self {
+                date,
+                millis_of_day,
+            })
+        }
+    }
+
+    /// Formats as chrono's `DateTime<Utc>::format("%Y-%m-%d %H:%M:%S%.3f%z")`.
+    impl fmt::Display for CivilTimestamp {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let secs = self.millis_of_day / MILLIS_PER_SECOND;
+            write!(
+                f,
+                "{} {:02}:{:02}:{:02}.{:03}+0000",
+                self.date,
+                secs / 3_600,
+                secs / 60 % 60,
+                secs % 60,
+                self.millis_of_day % MILLIS_PER_SECOND,
+            )
+        }
+    }
+}
+
 impl std::fmt::Display for CqlValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use crate::pretty::{
@@ -1289,11 +1402,13 @@ impl std::fmt::Display for CqlValue {
             )?,
             CqlValue::Counter(c) => write!(f, "{}", c.0)?,
             CqlValue::Date(d) => {
-                // TODO: chrono::NaiveDate does not handle the whole range
-                // supported by the `date` datatype
-                match d.try_to_chrono_04_naive_date() {
-                    Ok(d) => write!(f, "'{d}'")?,
-                    Err(_) => f.write_str("<date out of representable range>")?,
+                // The representable range mirrors chrono 0.4's `NaiveDate`,
+                // which this impl used to delegate to. It does not cover the
+                // whole range supported by the `date` datatype.
+                let days_since_unix_epoch = d.0 as i64 - (1 << 31);
+                match civil::CivilDate::from_days_since_unix_epoch(days_since_unix_epoch) {
+                    Some(d) => write!(f, "'{d}'")?,
+                    None => f.write_str("<date out of representable range>")?,
                 }
             }
             CqlValue::Duration(d) => write!(f, "{}mo{}d{}ns", d.months, d.days, d.nanoseconds)?,
@@ -1307,9 +1422,9 @@ impl std::fmt::Display for CqlValue {
                     t % 1_000_000_000,
                 )?;
             }
-            CqlValue::Timestamp(ts) => match ts.try_to_chrono_04_datetime_utc() {
-                Ok(d) => write!(f, "{}", d.format("'%Y-%m-%d %H:%M:%S%.3f%z'"))?,
-                Err(_) => f.write_str("<timestamp out of representable range>")?,
+            CqlValue::Timestamp(ts) => match civil::CivilTimestamp::from_unix_millis(ts.0) {
+                Some(d) => write!(f, "'{d}'")?,
+                None => f.write_str("<timestamp out of representable range>")?,
             },
             CqlValue::Timeuuid(t) => write!(f, "{t}")?,
             CqlValue::Uuid(u) => write!(f, "{u}")?,
@@ -1629,26 +1744,16 @@ mod tests {
             ),
             "1mo2d3ns"
         );
-        let t = chrono_04::NaiveTime::from_hms_nano_opt(6, 5, 4, 123)
-            .unwrap()
-            .signed_duration_since(chrono_04::NaiveTime::MIN);
-        let t = t.num_nanoseconds().unwrap();
+        // 06:05:04 and 123 nanoseconds.
+        let t = (6 * 3_600 + 5 * 60 + 4) * 1_000_000_000 + 123;
         assert_eq!(
             format!("{}", CqlValue::Time(CqlTime(t))),
             "'06:05:04.000000123'"
         );
 
-        let t = chrono_04::NaiveDate::from_ymd_opt(2005, 4, 2)
-            .unwrap()
-            .and_time(chrono_04::NaiveTime::from_hms_opt(19, 37, 42).unwrap());
+        // 2005-04-02 19:37:42 UTC.
         assert_eq!(
-            format!(
-                "{}",
-                CqlValue::Timestamp(CqlTimestamp(
-                    t.signed_duration_since(chrono_04::NaiveDateTime::default())
-                        .num_milliseconds()
-                ))
-            ),
+            format!("{}", CqlValue::Timestamp(CqlTimestamp(1_112_470_662_000))),
             "'2005-04-02 19:37:42.000+0000'"
         );
 
@@ -1688,5 +1793,89 @@ mod tests {
             ),
             "{foo:123,bar:321}"
         );
+    }
+
+    #[test]
+    fn test_cql_value_displayer_date_and_timestamp_edges() {
+        let date = |days: i64| format!("{}", CqlValue::Date(CqlDate(((1 << 31) + days) as u32)));
+        let ts = |millis: i64| format!("{}", CqlValue::Timestamp(CqlTimestamp(millis)));
+
+        assert_eq!(date(0), "'1970-01-01'");
+        assert_eq!(date(-1), "'1969-12-31'");
+        // 2000-02-29 is a leap day (divisible by 400).
+        assert_eq!(date(11_016), "'2000-02-29'");
+        // Year 0 and years with fewer than four digits are zero-padded.
+        assert_eq!(date(-719_528), "'0000-01-01'");
+        // Negative and five-digit years carry an explicit sign.
+        assert_eq!(date(-719_529), "'-0001-12-31'");
+        assert_eq!(date(2_932_897), "'+10000-01-01'");
+        // chrono 0.4 NaiveDate range: -262143-01-01 ..= 262142-12-31.
+        assert_eq!(date(-96_465_292), "'-262143-01-01'");
+        assert_eq!(date(-96_465_293), "<date out of representable range>");
+        assert_eq!(date(95_026_236), "'+262142-12-31'");
+        assert_eq!(date(95_026_237), "<date out of representable range>");
+        assert_eq!(
+            format!("{}", CqlValue::Date(CqlDate(0))),
+            "<date out of representable range>"
+        );
+        assert_eq!(
+            format!("{}", CqlValue::Date(CqlDate(u32::MAX))),
+            "<date out of representable range>"
+        );
+
+        assert_eq!(ts(0), "'1970-01-01 00:00:00.000+0000'");
+        assert_eq!(ts(-1), "'1969-12-31 23:59:59.999+0000'");
+        assert_eq!(ts(1_112_470_662_123), "'2005-04-02 19:37:42.123+0000'");
+        assert_eq!(ts(i64::MAX), "<timestamp out of representable range>");
+        assert_eq!(ts(i64::MIN), "<timestamp out of representable range>");
+    }
+
+    /// Checks that the chrono-free `Display` of dates and timestamps prints
+    /// exactly what the previous chrono 0.4 based implementation printed.
+    #[cfg(feature = "chrono-04")]
+    #[test]
+    fn test_cql_value_displayer_matches_chrono_04() {
+        fn chrono_date(days: i64) -> String {
+            match CqlDate(((1 << 31) + days) as u32).try_to_chrono_04_naive_date() {
+                Ok(d) => format!("'{d}'"),
+                Err(_) => "<date out of representable range>".to_owned(),
+            }
+        }
+        fn chrono_ts(millis: i64) -> String {
+            match CqlTimestamp(millis).try_to_chrono_04_datetime_utc() {
+                Ok(d) => format!("{}", d.format("'%Y-%m-%d %H:%M:%S%.3f%z'")),
+                Err(_) => "<timestamp out of representable range>".to_owned(),
+            }
+        }
+
+        let min_days = chrono_04::NaiveDate::MIN
+            .signed_duration_since(chrono_04::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days();
+        let max_days = chrono_04::NaiveDate::MAX
+            .signed_duration_since(chrono_04::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days();
+        let mut days: Vec<i64> = vec![min_days - 1, min_days, max_days, max_days + 1];
+        days.extend(-(1 << 31)..-(1 << 31) + 3);
+        days.extend((1 << 31) - 3..(1 << 31));
+        // Every day across four 400-year Gregorian cycles around year 0,
+        // plus a coarse sweep of the whole CQL `date` range.
+        days.extend(-719_528 - 2 * 146_097..-719_528 + 2 * 146_097);
+        days.extend((-(1i64 << 31)..(1i64 << 31)).step_by(9_973));
+        for d in days {
+            let cql = CqlValue::Date(CqlDate(((1 << 31) + d) as u32));
+            assert_eq!(format!("{cql}"), chrono_date(d), "days since epoch: {d}");
+        }
+
+        let mut millis: Vec<i64> = vec![i64::MIN, i64::MIN + 1, i64::MAX - 1, i64::MAX, 0, -1];
+        for edge in [min_days, max_days + 1] {
+            let m = edge * 86_400_000;
+            millis.extend([m - 1, m, m + 1]);
+        }
+        millis.extend((-(1i64 << 62)..(1i64 << 62)).step_by(1 << 41));
+        millis.extend((-1_000_000_007i64..1_000_000_007).step_by(997));
+        for m in millis {
+            let cql = CqlValue::Timestamp(CqlTimestamp(m));
+            assert_eq!(format!("{cql}"), chrono_ts(m), "millis since epoch: {m}");
+        }
     }
 }
