@@ -9,7 +9,6 @@ use std::{
 
 use crate::errors::{RequestAttemptError, RequestError};
 use crate::policies::retry::RetryDecision;
-use chrono::{DateTime, Utc};
 
 use tracing::warn;
 
@@ -68,8 +67,114 @@ pub trait HistoryListener: Debug + Send + Sync {
     );
 }
 
-/// A point in time when an event happened.
-pub type TimePoint = DateTime<Utc>;
+/// A point in time (UTC instant) when an event happened.
+///
+/// Wraps a [`jiff::Timestamp`]. Formatting reproduces what this type printed
+/// when it was an alias of `chrono::DateTime<chrono::Utc>`:
+/// - `Display`: `2022-02-22 20:22:22.123 UTC`
+/// - `Debug`: `2022-02-22T20:22:22.123Z`
+///
+/// The fractional second is omitted when zero, and otherwise printed with
+/// 3, 6 or 9 digits (the fewest of those that represent it exactly).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TimePoint(jiff::Timestamp);
+
+impl TimePoint {
+    /// Returns the current system time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the system clock is outside of [`jiff::Timestamp`]'s range
+    /// (years -9999 to 9999), like [`jiff::Timestamp::now`].
+    pub fn now() -> Self {
+        Self(jiff::Timestamp::now())
+    }
+
+    /// Returns this point in time as a [`jiff::Timestamp`].
+    pub fn as_timestamp(&self) -> jiff::Timestamp {
+        self.0
+    }
+
+    /// Writes `<date><date_time_sep><time><suffix>` in chrono 0.4's format.
+    fn write_chrono_style(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        date_time_sep: char,
+        suffix: &str,
+    ) -> std::fmt::Result {
+        let dt = jiff::tz::Offset::UTC.to_datetime(self.0);
+        let year = dt.year();
+        if (0..=9999).contains(&year) {
+            write!(f, "{year:04}")?;
+        } else {
+            // chrono requires an explicit sign for years outside 0..=9999.
+            write!(f, "{year:+05}")?;
+        }
+        write!(
+            f,
+            "-{:02}-{:02}{date_time_sep}{:02}:{:02}:{:02}",
+            dt.month(),
+            dt.day(),
+            dt.hour(),
+            dt.minute(),
+            dt.second(),
+        )?;
+        let nanos = dt.subsec_nanosecond();
+        debug_assert!(
+            (0..1_000_000_000).contains(&nanos),
+            "subsecond nanoseconds out of range: {nanos}"
+        );
+        if nanos == 0 {
+            // No fractional part.
+        } else if nanos % 1_000_000 == 0 {
+            write!(f, ".{:03}", nanos / 1_000_000)?;
+        } else if nanos % 1_000 == 0 {
+            write!(f, ".{:06}", nanos / 1_000)?;
+        } else {
+            write!(f, ".{nanos:09}")?;
+        }
+        f.write_str(suffix)
+    }
+}
+
+impl From<jiff::Timestamp> for TimePoint {
+    fn from(timestamp: jiff::Timestamp) -> Self {
+        Self(timestamp)
+    }
+}
+
+impl From<TimePoint> for jiff::Timestamp {
+    fn from(time_point: TimePoint) -> Self {
+        time_point.0
+    }
+}
+
+impl From<TimePoint> for SystemTime {
+    fn from(time_point: TimePoint) -> Self {
+        time_point.0.into()
+    }
+}
+
+impl TryFrom<SystemTime> for TimePoint {
+    type Error = jiff::Error;
+
+    /// Fails if `time` is outside of [`jiff::Timestamp`]'s range.
+    fn try_from(time: SystemTime) -> Result<Self, Self::Error> {
+        jiff::Timestamp::try_from(time).map(Self)
+    }
+}
+
+impl Display for TimePoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write_chrono_style(f, ' ', " UTC")
+    }
+}
+
+impl Debug for TimePoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write_chrono_style(f, 'T', "Z")
+    }
+}
 
 /// HistoryCollector can be used as [HistoryListener] to collect all the request history events.
 /// Each event is marked with a UTC timestamp.
@@ -120,7 +225,7 @@ impl HistoryCollectorData {
     }
 
     fn add_event(&mut self, event: HistoryEvent) {
-        let event_time: TimePoint = SystemTime::now().into();
+        let event_time = TimePoint::now();
         self.events.push((event, event_time));
     }
 }
@@ -514,20 +619,76 @@ mod tests {
         RequestId, SpeculativeId, StructuredHistory, TimePoint,
     };
     use assert_matches::assert_matches;
-    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use scylla_cql::{Consistency, frame::response::CqlResponseKind};
+
+    fn time_point(second: i64, nanosecond: i32) -> TimePoint {
+        TimePoint::from(jiff::Timestamp::new(second, nanosecond).unwrap())
+    }
+
+    /// The format must match what `chrono::DateTime<chrono::Utc>` printed
+    /// when `TimePoint` was an alias of it.
+    #[test]
+    fn time_point_display_matches_chrono_format() {
+        let cases: &[(i64, i32, &str)] = &[
+            (1_645_561_342, 0, "2022-02-22 20:22:22 UTC"),
+            (1_645_561_342, 100_000_000, "2022-02-22 20:22:22.100 UTC"),
+            (1_645_561_342, 123_000_000, "2022-02-22 20:22:22.123 UTC"),
+            (1_645_561_342, 123_456_000, "2022-02-22 20:22:22.123456 UTC"),
+            (
+                1_645_561_342,
+                123_456_789,
+                "2022-02-22 20:22:22.123456789 UTC",
+            ),
+            (1_645_561_342, 1, "2022-02-22 20:22:22.000000001 UTC"),
+            (0, 0, "1970-01-01 00:00:00 UTC"),
+            (-1, 0, "1969-12-31 23:59:59 UTC"),
+            // 0001-02-03 04:05:06: years below 1000 are zero-padded.
+            (-62_132_730_894, 0, "0001-02-03 04:05:06 UTC"),
+            // -0001-12-31 23:59:59: negative years carry a sign.
+            (-62_167_219_201, 0, "-0001-12-31 23:59:59 UTC"),
+            // jiff::Timestamp::MAX is 9999-12-30 22:00:00 UTC.
+            (
+                253_402_207_199,
+                999_999_999,
+                "9999-12-30 21:59:59.999999999 UTC",
+            ),
+        ];
+        for &(second, nanosecond, expected) in cases {
+            assert_eq!(format!("{}", time_point(second, nanosecond)), expected);
+        }
+    }
+
+    #[test]
+    fn time_point_debug_matches_chrono_format() {
+        let cases: &[(i64, i32, &str)] = &[
+            (1_645_561_342, 0, "2022-02-22T20:22:22Z"),
+            (1_645_561_342, 120_000_000, "2022-02-22T20:22:22.120Z"),
+            (1_645_561_342, 1_000, "2022-02-22T20:22:22.000001Z"),
+            (1_645_561_342, 10, "2022-02-22T20:22:22.000000010Z"),
+            (-62_167_219_201, 0, "-0001-12-31T23:59:59Z"),
+        ];
+        for &(second, nanosecond, expected) in cases {
+            assert_eq!(format!("{:?}", time_point(second, nanosecond)), expected);
+        }
+    }
+
+    #[test]
+    fn time_point_conversions_round_trip() {
+        let ts = jiff::Timestamp::new(1_645_561_342, 123_456_789).unwrap();
+        let tp = TimePoint::from(ts);
+        assert_eq!(tp.as_timestamp(), ts);
+        assert_eq!(jiff::Timestamp::from(tp), ts);
+        let st: std::time::SystemTime = tp.into();
+        assert_eq!(TimePoint::try_from(st).unwrap(), tp);
+        assert!(TimePoint::now() > tp);
+    }
 
     // Set a single time for all timestamps within StructuredHistory.
     // HistoryCollector sets the timestamp to current time which changes with each test.
     // Setting it to one makes it possible to test displaying consistently.
     fn set_one_time(mut history: StructuredHistory) -> StructuredHistory {
-        let the_time: TimePoint = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDateTime::new(
-                NaiveDate::from_ymd_opt(2022, 2, 22).unwrap(),
-                NaiveTime::from_hms_opt(20, 22, 22).unwrap(),
-            ),
-            Utc,
-        );
+        // 2022-02-22 20:22:22 UTC
+        let the_time = TimePoint::from(jiff::Timestamp::from_second(1_645_561_342).unwrap());
 
         for request in &mut history.requests {
             request.start_time = the_time;

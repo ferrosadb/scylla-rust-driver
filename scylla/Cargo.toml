@@ -99,7 +99,7 @@ bytes = "1.0.1"
 # Used for representing tracing ids and host ids.
 uuid = { version = "1.0", features = ["v4"] }
 # Used in history module to represent times of events.
-chrono = { version = "0.4.32", default-features = false, features = ["clock"] }
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 # Stream trait is part of public API (in pager).
 # Stream and future combinators are used in many places in the crate.
 futures = "0.3.6"
@@ -148,6 +148,8 @@ hashbrown = "0.15"
 smallvec = "1.8.0"
 
 [dev-dependencies]
+# Used by chrono-04 integration tests.
+chrono = { version = "0.4.32", default-features = false, features = ["clock"] }
 num-bigint-03 = { package = "num-bigint", version = "0.3" }
 num-bigint-04 = { package = "num-bigint", version = "0.4" }
 bigdecimal-04 = { package = "bigdecimal", version = "0.4" }

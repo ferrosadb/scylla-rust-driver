@@ -1,7 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use futures::StreamExt;
 use scylla::errors::{RequestAttemptError, RequestError};
 use scylla::observability::history::{
@@ -16,13 +15,8 @@ use crate::utils::{PerformDDL, create_new_session_builder, setup_tracing, unique
 // HistoryCollector sets the timestamp to current time which changes with each test.
 // Setting it to one makes it possible to test displaying consistently.
 fn set_one_time(mut history: StructuredHistory) -> StructuredHistory {
-    let the_time: TimePoint = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDateTime::new(
-            NaiveDate::from_ymd_opt(2022, 2, 22).unwrap(),
-            NaiveTime::from_hms_opt(20, 22, 22).unwrap(),
-        ),
-        Utc,
-    );
+    // 2022-02-22 20:22:22 UTC
+    let the_time = TimePoint::from(jiff::Timestamp::from_second(1_645_561_342).unwrap());
 
     for query in &mut history.requests {
         query.start_time = the_time;
