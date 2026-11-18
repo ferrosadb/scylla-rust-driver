@@ -11,7 +11,7 @@ Without any extra features enabled, only `value::CqlTimestamp` is available. It'
 [`i64`](https://doc.rust-lang.org/std/primitive.i64.html) wrapper and it matches the internal time representation. It's
 the only type that supports full range of values that database accepts.
 
-However, for most use cases other types are more practical. See following sections for `chrono` and `time`.
+However, for most use cases other types are more practical. See the following section for `time`.
 
 ```rust
 # extern crate scylla;
@@ -36,46 +36,6 @@ let mut iter = session.query_iter("SELECT a FROM keyspace.table", &[])
     .rows_stream::<(CqlTimestamp,)>()?;
 while let Some((value,)) = iter.try_next().await? {
     // ...
-}
-# Ok(())
-# }
-```
-
-## chrono::DateTime
-
-If the full value range is not required, the `chrono-04` feature can be used to enable support of
-[`chrono::DateTime`](https://docs.rs/chrono/0.4/chrono/struct.DateTime.html). All values are expected to be converted
-to UTC timezone explicitly, as [timestamp](https://docs.scylladb.com/stable/cql/types.html#timestamps) doesn't store
-timezone information. Any precision finer than 1ms will be lost.
-
-```rust
-# extern crate chrono;
-# extern crate scylla;
-# extern crate futures;
-# use scylla::client::session::Session;
-# use std::error::Error;
-# async fn check_only_compiles(session: &Session) -> Result<(), Box<dyn Error>> {
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use futures::TryStreamExt;
-
-// 64.123 seconds since unix epoch, 1970-01-01 00:01:04.123
-let to_insert = NaiveDateTime::new(
-    NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-    NaiveTime::from_hms_milli_opt(0, 1, 4, 123).unwrap(),
-)
-.and_utc();
-
-// Write timestamp to the table
-session
-    .query_unpaged("INSERT INTO keyspace.table (a) VALUES(?)", (to_insert,))
-    .await?;
-
-// Read timestamp from the table
-let mut iter = session.query_iter("SELECT a FROM keyspace.table", &[])
-    .await?
-    .rows_stream::<(DateTime<Utc>,)>()?;
-while let Some((timestamp_value,)) = iter.try_next().await? {
-    println!("{:?}", timestamp_value);
 }
 # Ok(())
 # }

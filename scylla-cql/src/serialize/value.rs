@@ -22,9 +22,6 @@ use crate::value::{
     CqlTimeuuid, CqlValue, CqlVarint, CqlVarintBorrowed, Emptiable, MaybeEmpty, MaybeUnset, Unset,
 };
 
-#[cfg(feature = "chrono-04")]
-use crate::value::ValueOverflow;
-
 use super::writers::WrittenCellProof;
 use super::{CellValueBuilder, CellWriter, SerializationError};
 
@@ -170,30 +167,6 @@ impl SerializeValue for CqlTime {
     impl_serialize_via_writer!(|me, typ, writer| {
         exact_type_check!(typ, Time);
         writer.set_value(me.0.to_be_bytes().as_slice()).unwrap()
-    });
-}
-#[cfg(feature = "chrono-04")]
-impl SerializeValue for chrono_04::NaiveDate {
-    impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Date);
-        <CqlDate as SerializeValue>::serialize(&(*me).into(), typ, writer)?
-    });
-}
-#[cfg(feature = "chrono-04")]
-impl SerializeValue for chrono_04::DateTime<chrono_04::Utc> {
-    impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Timestamp);
-        <CqlTimestamp as SerializeValue>::serialize(&(*me).into(), typ, writer)?
-    });
-}
-#[cfg(feature = "chrono-04")]
-impl SerializeValue for chrono_04::NaiveTime {
-    impl_serialize_via_writer!(|me, typ, writer| {
-        exact_type_check!(typ, Time);
-        let cql_time = CqlTime::try_from(*me).map_err(|_: ValueOverflow| {
-            mk_ser_err::<Self>(typ, BuiltinSerializationErrorKind::ValueOverflow)
-        })?;
-        <CqlTime as SerializeValue>::serialize(&cql_time, typ, writer)?
     });
 }
 #[cfg(feature = "time-03")]

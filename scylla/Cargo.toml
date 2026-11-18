@@ -41,8 +41,6 @@ rustls-023 = ["dep:tokio-rustls", "dep:rustls"]
 secrecy-08 = ["scylla-cql/secrecy-08"]
 # Enables support for CQL ser/de of Secrecy type from secrecy 0.10 crate.
 secrecy-10 = ["scylla-cql/secrecy-10"]
-# Enables support for CQL ser/de of time/date types from chrono 0.4 crate.
-chrono-04 = ["scylla-cql/chrono-04"]
 # Enables support for CQL ser/de of time/date types from time 0.3 crate.
 time-03 = ["scylla-cql/time-03"]
 # Enables support for CQL ser/de of arbitrary length integer types from num-bigint 0.3 crate.
@@ -53,7 +51,6 @@ num-bigint-04 = ["scylla-cql/num-bigint-04"]
 bigdecimal-04 = ["scylla-cql/bigdecimal-04"]
 # Enables support for CQL ser/de of all supported external types.
 full-serialization = [
-    "chrono-04",
     "time-03",
     "secrecy-08",
     "secrecy-10",
@@ -148,8 +145,6 @@ hashbrown = "0.15"
 smallvec = "1.8.0"
 
 [dev-dependencies]
-# Used by chrono-04 integration tests.
-chrono = { version = "0.4.32", default-features = false, features = ["clock"] }
 num-bigint-03 = { package = "num-bigint", version = "0.3" }
 num-bigint-04 = { package = "num-bigint", version = "0.4" }
 bigdecimal-04 = { package = "bigdecimal", version = "0.4" }

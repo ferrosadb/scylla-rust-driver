@@ -1922,35 +1922,6 @@ fn ipaddr_serialization() {
     );
 }
 
-#[cfg(feature = "chrono-04")]
-#[test]
-fn naive_date_04_serialization() {
-    use chrono_04::NaiveDate;
-    // 1970-01-31 is 2^31
-    let unix_epoch: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    assert_eq!(
-        do_serialize(unix_epoch, &ColumnType::Native(NativeType::Date)),
-        vec![0, 0, 0, 4, 128, 0, 0, 0]
-    );
-    assert_eq!(2_u32.pow(31).to_be_bytes(), [128, 0, 0, 0]);
-
-    // 1969-12-02 is 2^31 - 30
-    let before_epoch: NaiveDate = NaiveDate::from_ymd_opt(1969, 12, 2).unwrap();
-    assert_eq!(
-        do_serialize(before_epoch, &ColumnType::Native(NativeType::Date)),
-        vec![0, 0, 0, 4, 127, 255, 255, 226]
-    );
-    assert_eq!((2_u32.pow(31) - 30).to_be_bytes(), [127, 255, 255, 226]);
-
-    // 1970-01-31 is 2^31 + 30
-    let after_epoch: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 31).unwrap();
-    assert_eq!(
-        do_serialize(after_epoch, &ColumnType::Native(NativeType::Date)),
-        vec![0, 0, 0, 4, 128, 0, 0, 30]
-    );
-    assert_eq!((2_u32.pow(31) + 30).to_be_bytes(), [128, 0, 0, 30]);
-}
-
 #[cfg(feature = "time-03")]
 #[test]
 fn date_03_serialization() {
@@ -2028,43 +1999,6 @@ fn cql_time_serialization() {
     }
 }
 
-#[cfg(feature = "chrono-04")]
-#[test]
-fn naive_time_04_serialization() {
-    use chrono_04::NaiveTime;
-
-    let midnight_time: i64 = 0;
-    let max_time: i64 = 24 * 60 * 60 * 1_000_000_000 - 1;
-    let any_time: i64 = (3600 + 2 * 60 + 3) * 1_000_000_000 + 4;
-    let test_cases = [
-        (NaiveTime::MIN, midnight_time.to_be_bytes()),
-        (
-            NaiveTime::from_hms_nano_opt(23, 59, 59, 999_999_999).unwrap(),
-            max_time.to_be_bytes(),
-        ),
-        (
-            NaiveTime::from_hms_nano_opt(1, 2, 3, 4).unwrap(),
-            any_time.to_be_bytes(),
-        ),
-    ];
-    for (time, expected) in test_cases {
-        let bytes = do_serialize(time, &ColumnType::Native(NativeType::Time));
-
-        let mut expected_bytes: Vec<u8> = vec![0, 0, 0, 8];
-        expected_bytes.extend_from_slice(&expected);
-
-        assert_eq!(bytes, expected_bytes)
-    }
-
-    // Leap second must return error on serialize
-    let leap_second = NaiveTime::from_hms_nano_opt(23, 59, 59, 1_500_000_000).unwrap();
-    let err = do_serialize_err(leap_second, &ColumnType::Native(NativeType::Time));
-    assert_matches!(
-        get_ser_err(&err).kind,
-        BuiltinSerializationErrorKind::ValueOverflow
-    )
-}
-
 #[cfg(feature = "time-03")]
 #[test]
 fn time_03_serialization() {
@@ -2103,59 +2037,6 @@ fn cql_timestamp_serialization() {
 
         let mut expected_bytes: Vec<u8> = vec![0, 0, 0, 8];
         expected_bytes.extend_from_slice(&test_val.to_be_bytes());
-
-        assert_eq!(bytes, expected_bytes);
-        assert_eq!(expected_bytes.len(), 12);
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-#[test]
-fn date_time_04_serialization() {
-    use chrono_04::{DateTime, Utc};
-    let test_cases: [(DateTime<Utc>, [u8; 8]); 7] = [
-        (
-            // Max time serialized without error
-            DateTime::<Utc>::MAX_UTC,
-            DateTime::<Utc>::MAX_UTC.timestamp_millis().to_be_bytes(),
-        ),
-        (
-            // Min time serialized without error
-            DateTime::<Utc>::MIN_UTC,
-            DateTime::<Utc>::MIN_UTC.timestamp_millis().to_be_bytes(),
-        ),
-        (
-            // UNIX epoch baseline
-            DateTime::from_timestamp(0, 0).unwrap(),
-            0i64.to_be_bytes(),
-        ),
-        (
-            // One second since UNIX epoch
-            DateTime::from_timestamp(1, 0).unwrap(),
-            1000i64.to_be_bytes(),
-        ),
-        (
-            // 1 nanosecond since UNIX epoch, lost during serialization
-            DateTime::from_timestamp(0, 1).unwrap(),
-            0i64.to_be_bytes(),
-        ),
-        (
-            // 1 millisecond since UNIX epoch
-            DateTime::from_timestamp(0, 1_000_000).unwrap(),
-            1i64.to_be_bytes(),
-        ),
-        (
-            // 2 days before UNIX epoch
-            DateTime::from_timestamp(-2 * 24 * 60 * 60, 0).unwrap(),
-            (-2 * 24i64 * 60 * 60 * 1000).to_be_bytes(),
-        ),
-    ];
-    for (test_datetime, expected) in test_cases {
-        let bytes: Vec<u8> =
-            do_serialize(test_datetime, &ColumnType::Native(NativeType::Timestamp));
-
-        let mut expected_bytes: Vec<u8> = vec![0, 0, 0, 8];
-        expected_bytes.extend_from_slice(&expected);
 
         assert_eq!(bytes, expected_bytes);
         assert_eq!(expected_bytes.len(), 12);

@@ -675,108 +675,6 @@ pub struct CqlTimestamp(pub i64);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CqlTime(pub i64);
 
-#[cfg(feature = "chrono-04")]
-impl CqlDate {
-    fn try_to_chrono_04_naive_date(&self) -> Result<chrono_04::NaiveDate, ValueOverflow> {
-        let days_since_unix_epoch = self.0 as i64 - (1 << 31);
-
-        // date_days is u32 then converted to i64 then we subtract 2^31;
-        // Max value is 2^31, min value is -2^31. Both values can safely fit in chrono::Duration, this call won't panic
-        let duration_since_unix_epoch =
-            chrono_04::Duration::try_days(days_since_unix_epoch).unwrap();
-
-        chrono_04::NaiveDate::from_yo_opt(1970, 1)
-            .unwrap()
-            .checked_add_signed(duration_since_unix_epoch)
-            .ok_or(ValueOverflow)
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-impl From<chrono_04::NaiveDate> for CqlDate {
-    fn from(value: chrono_04::NaiveDate) -> Self {
-        let unix_epoch = chrono_04::NaiveDate::from_yo_opt(1970, 1).unwrap();
-
-        // `NaiveDate` range is -262145-01-01 to 262143-12-31
-        // Both values are well within supported range
-        let days = ((1 << 31) + value.signed_duration_since(unix_epoch).num_days()) as u32;
-
-        Self(days)
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-impl TryInto<chrono_04::NaiveDate> for CqlDate {
-    type Error = ValueOverflow;
-
-    fn try_into(self) -> Result<chrono_04::NaiveDate, Self::Error> {
-        self.try_to_chrono_04_naive_date()
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-impl CqlTimestamp {
-    fn try_to_chrono_04_datetime_utc(
-        &self,
-    ) -> Result<chrono_04::DateTime<chrono_04::Utc>, ValueOverflow> {
-        use chrono_04::TimeZone;
-        match chrono_04::Utc.timestamp_millis_opt(self.0) {
-            chrono_04::LocalResult::Single(datetime) => Ok(datetime),
-            _ => Err(ValueOverflow),
-        }
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-impl From<chrono_04::DateTime<chrono_04::Utc>> for CqlTimestamp {
-    fn from(value: chrono_04::DateTime<chrono_04::Utc>) -> Self {
-        Self(value.timestamp_millis())
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-impl TryInto<chrono_04::DateTime<chrono_04::Utc>> for CqlTimestamp {
-    type Error = ValueOverflow;
-
-    fn try_into(self) -> Result<chrono_04::DateTime<chrono_04::Utc>, Self::Error> {
-        self.try_to_chrono_04_datetime_utc()
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-impl TryFrom<chrono_04::NaiveTime> for CqlTime {
-    type Error = ValueOverflow;
-
-    fn try_from(value: chrono_04::NaiveTime) -> Result<Self, Self::Error> {
-        let nanos = value
-            .signed_duration_since(chrono_04::NaiveTime::MIN)
-            .num_nanoseconds()
-            .unwrap();
-
-        // Value can exceed max CQL time in case of leap second
-        if nanos <= 86399999999999 {
-            Ok(Self(nanos))
-        } else {
-            Err(ValueOverflow)
-        }
-    }
-}
-
-#[cfg(feature = "chrono-04")]
-impl TryInto<chrono_04::NaiveTime> for CqlTime {
-    type Error = ValueOverflow;
-
-    fn try_into(self) -> Result<chrono_04::NaiveTime, Self::Error> {
-        let secs = (self.0 / 1_000_000_000)
-            .try_into()
-            .map_err(|_| ValueOverflow)?;
-        let nanos = (self.0 % 1_000_000_000)
-            .try_into()
-            .map_err(|_| ValueOverflow)?;
-        chrono_04::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos).ok_or(ValueOverflow)
-    }
-}
-
 #[cfg(feature = "time-03")]
 impl From<time_03::Date> for CqlDate {
     fn from(value: time_03::Date) -> Self {
@@ -911,7 +809,6 @@ pub enum CqlValue {
     /// Variable-precision decimal.
     Decimal(CqlDecimal),
     /// Days since -5877641-06-23 i.e. 2^31 days before unix epoch
-    /// Can be converted to chrono::NaiveDate (-262145-1-1 to 262143-12-31) using [TryInto].
     Date(CqlDate),
     /// 64-bit IEEE-754 floating point number.
     Double(f64),
@@ -986,13 +883,6 @@ impl CqlValue {
         }
     }
 
-    /// Converts the value to `chrono` NaiveDate if it is of Date type.
-    #[cfg(test)]
-    #[cfg(feature = "chrono-04")]
-    pub(crate) fn as_naive_date_04(&self) -> Option<chrono_04::NaiveDate> {
-        self.as_cql_date().and_then(|date| date.try_into().ok())
-    }
-
     /// Converts the value to `time` Date if it is of Date type.
     #[cfg(test)]
     #[cfg(feature = "time-03")]
@@ -1008,13 +898,6 @@ impl CqlValue {
         }
     }
 
-    /// Converts the value to `chrono` DateTime if it is of Timestamp type.
-    #[cfg(test)]
-    #[cfg(feature = "chrono-04")]
-    pub(crate) fn as_datetime_04(&self) -> Option<chrono_04::DateTime<chrono_04::Utc>> {
-        self.as_cql_timestamp().and_then(|ts| ts.try_into().ok())
-    }
-
     /// Converts the value to `time` OffsetDateTime if it is of Timestamp type.
     #[cfg(test)]
     #[cfg(feature = "time-03")]
@@ -1028,13 +911,6 @@ impl CqlValue {
             Self::Time(i) => Some(*i),
             _ => None,
         }
-    }
-
-    /// Converts the value to `chrono` NaiveTime if it is of Time type.
-    #[cfg(test)]
-    #[cfg(feature = "chrono-04")]
-    pub(crate) fn as_naive_time_04(&self) -> Option<chrono_04::NaiveTime> {
-        self.as_cql_time().and_then(|ts| ts.try_into().ok())
     }
 
     /// Converts the value to `time` Time if it is of Time type.
@@ -1260,8 +1136,8 @@ impl CqlValue {
 ///
 /// The output format and the representable range reproduce exactly what the
 /// previous chrono 0.4 based implementation printed (`NaiveDate`'s `Display`
-/// and `DateTime<Utc>::format("%Y-%m-%d %H:%M:%S%.3f%z")`), so that `Display`
-/// does not require the optional `chrono-04` dependency.
+/// and `DateTime<Utc>::format("%Y-%m-%d %H:%M:%S%.3f%z")`), without depending
+/// on chrono.
 mod civil {
     use std::fmt;
 
@@ -1830,52 +1706,113 @@ mod tests {
         assert_eq!(ts(i64::MIN), "<timestamp out of representable range>");
     }
 
-    /// Checks that the chrono-free `Display` of dates and timestamps prints
-    /// exactly what the previous chrono 0.4 based implementation printed.
-    #[cfg(feature = "chrono-04")]
+    /// Golden vectors generated with chrono 0.4.45, which this `Display` impl
+    /// used to delegate to (`NaiveDate`'s `Display` for dates and
+    /// `DateTime<Utc>::format("'%Y-%m-%d %H:%M:%S%.3f%z'")` for timestamps).
+    /// Covers chrono's range edges, the CQL `date` extremes, signed and
+    /// zero-padded years, Gregorian leap rules and millisecond carries.
     #[test]
-    fn test_cql_value_displayer_matches_chrono_04() {
-        fn chrono_date(days: i64) -> String {
-            match CqlDate(((1 << 31) + days) as u32).try_to_chrono_04_naive_date() {
-                Ok(d) => format!("'{d}'"),
-                Err(_) => "<date out of representable range>".to_owned(),
-            }
-        }
-        fn chrono_ts(millis: i64) -> String {
-            match CqlTimestamp(millis).try_to_chrono_04_datetime_utc() {
-                Ok(d) => format!("{}", d.format("'%Y-%m-%d %H:%M:%S%.3f%z'")),
-                Err(_) => "<timestamp out of representable range>".to_owned(),
-            }
-        }
+    fn test_cql_value_displayer_matches_chrono_04_golden() {
+        let dates: &[(i64, &str)] = &[
+            (-96465293, "<date out of representable range>"),
+            (-96465292, "'-262143-01-01'"),
+            (-96465291, "'-262143-01-02'"),
+            (95026235, "'+262142-12-30'"),
+            (95026236, "'+262142-12-31'"),
+            (95026237, "<date out of representable range>"),
+            (-2147483648, "<date out of representable range>"),
+            (-2147483647, "<date out of representable range>"),
+            (2147483647, "<date out of representable range>"),
+            (0, "'1970-01-01'"),
+            (-1, "'1969-12-31'"),
+            (1, "'1970-01-02'"),
+            (-719528, "'0000-01-01'"),
+            (-719469, "'0000-02-29'"),
+            (-719468, "'0000-03-01'"),
+            (-719529, "'-0001-12-31'"),
+            (-719834, "'-0001-03-01'"),
+            (-755994, "'-0100-02-28'"),
+            (-755993, "'-0100-03-01'"),
+            (-865566, "'-0400-02-29'"),
+            (-719162, "'0001-01-01'"),
+            (-354286, "'0999-12-31'"),
+            (-354285, "'1000-01-01'"),
+            (-25509, "'1900-02-28'"),
+            (-25508, "'1900-03-01'"),
+            (11016, "'2000-02-29'"),
+            (47540, "'2100-02-28'"),
+            (47541, "'2100-03-01'"),
+            (2932896, "'9999-12-31'"),
+            (2932897, "'+10000-01-01'"),
+            (-4371587, "'-9999-01-01'"),
+            (-4371588, "'-10000-12-31'"),
+            (-4372153, "'-10001-06-15'"),
+            (44372039, "'+123456-07-08'"),
+            (-45810717, "'-123456-07-08'"),
+            (-120000000, "<date out of representable range>"),
+            (-80000000, "'-217063-06-10'"),
+            (80000000, "'+221002-07-25'"),
+            (120000000, "<date out of representable range>"),
+        ];
+        let timestamps: &[(i64, &str)] = &[
+            (
+                -9223372036854775808,
+                "<timestamp out of representable range>",
+            ),
+            (
+                -9223372036854775807,
+                "<timestamp out of representable range>",
+            ),
+            (
+                9223372036854775806,
+                "<timestamp out of representable range>",
+            ),
+            (
+                9223372036854775807,
+                "<timestamp out of representable range>",
+            ),
+            (0, "'1970-01-01 00:00:00.000+0000'"),
+            (-1, "'1969-12-31 23:59:59.999+0000'"),
+            (1, "'1970-01-01 00:00:00.001+0000'"),
+            (-999, "'1969-12-31 23:59:59.001+0000'"),
+            (-1000, "'1969-12-31 23:59:59.000+0000'"),
+            (-1001, "'1969-12-31 23:59:58.999+0000'"),
+            (999, "'1970-01-01 00:00:00.999+0000'"),
+            (1000, "'1970-01-01 00:00:01.000+0000'"),
+            (86399999, "'1970-01-01 23:59:59.999+0000'"),
+            (86400000, "'1970-01-02 00:00:00.000+0000'"),
+            (-86400000, "'1969-12-31 00:00:00.000+0000'"),
+            (-86400001, "'1969-12-30 23:59:59.999+0000'"),
+            (951782400000, "'2000-02-29 00:00:00.000+0000'"),
+            (4102444799999, "'2099-12-31 23:59:59.999+0000'"),
+            (-62135596800001, "'0000-12-31 23:59:59.999+0000'"),
+            (-8334601228800001, "<timestamp out of representable range>"),
+            (-8334601228800000, "'-262143-01-01 00:00:00.000+0000'"),
+            (-8334601228799999, "'-262143-01-01 00:00:00.001+0000'"),
+            (8210266876799999, "'+262142-12-31 23:59:59.999+0000'"),
+            (8210266876800000, "<timestamp out of representable range>"),
+            (8210266876800001, "<timestamp out of representable range>"),
+            (-1125899906842624, "'-33709-08-27 01:52:37.376+0000'"),
+            (-35184372088832, "'0855-01-19 11:18:31.168+0000'"),
+            (35184372088832, "'3084-12-12 12:41:28.832+0000'"),
+            (1125899906842624, "'+37648-05-06 22:07:22.624+0000'"),
+            (
+                -4611686018427387904,
+                "<timestamp out of representable range>",
+            ),
+            (
+                4611686018427387904,
+                "<timestamp out of representable range>",
+            ),
+        ];
 
-        let min_days = chrono_04::NaiveDate::MIN
-            .signed_duration_since(chrono_04::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-            .num_days();
-        let max_days = chrono_04::NaiveDate::MAX
-            .signed_duration_since(chrono_04::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-            .num_days();
-        let mut days: Vec<i64> = vec![min_days - 1, min_days, max_days, max_days + 1];
-        days.extend(-(1 << 31)..-(1 << 31) + 3);
-        days.extend((1 << 31) - 3..(1 << 31));
-        // Every day across four 400-year Gregorian cycles around year 0,
-        // plus a coarse sweep of the whole CQL `date` range.
-        days.extend(-719_528 - 2 * 146_097..-719_528 + 2 * 146_097);
-        days.extend((-(1i64 << 31)..(1i64 << 31)).step_by(9_973));
-        for d in days {
-            let cql = CqlValue::Date(CqlDate(((1 << 31) + d) as u32));
-            assert_eq!(format!("{cql}"), chrono_date(d), "days since epoch: {d}");
+        for &(days, expected) in dates {
+            let cql = CqlValue::Date(CqlDate(((1i64 << 31) + days) as u32));
+            assert_eq!(format!("{cql}"), expected, "days since epoch: {days}");
         }
-
-        let mut millis: Vec<i64> = vec![i64::MIN, i64::MIN + 1, i64::MAX - 1, i64::MAX, 0, -1];
-        for edge in [min_days, max_days + 1] {
-            let m = edge * 86_400_000;
-            millis.extend([m - 1, m, m + 1]);
-        }
-        millis.extend((-(1i64 << 62)..(1i64 << 62)).step_by(1 << 41));
-        millis.extend((-1_000_000_007i64..1_000_000_007).step_by(997));
-        for m in millis {
-            let cql = CqlValue::Timestamp(CqlTimestamp(m));
-            assert_eq!(format!("{cql}"), chrono_ts(m), "millis since epoch: {m}");
+        for &(millis, expected) in timestamps {
+            let cql = CqlValue::Timestamp(CqlTimestamp(millis));
+            assert_eq!(format!("{cql}"), expected, "millis since epoch: {millis}");
         }
     }
 }

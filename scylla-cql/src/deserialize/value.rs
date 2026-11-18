@@ -450,7 +450,7 @@ impl_emptiable_strict_type!(
     }
 );
 
-#[cfg(any(feature = "chrono-04", feature = "time-03"))]
+#[cfg(feature = "time-03")]
 fn get_days_since_epoch_from_date_column<T>(
     typ: &ColumnType,
     v: Option<FrameSlice<'_>>,
@@ -461,23 +461,6 @@ fn get_days_since_epoch_from_date_column<T>(
     let days_since_epoch = days as i64 - (1i64 << 31);
     Ok(days_since_epoch)
 }
-
-#[cfg(feature = "chrono-04")]
-impl_emptiable_strict_type!(chrono_04::NaiveDate, Date, |typ: &'metadata ColumnType<
-    'metadata,
->,
-                                                         v: Option<
-    FrameSlice<'frame>,
->| {
-    let fail = || mk_deser_err::<Self>(typ, BuiltinDeserializationErrorKind::ValueOverflow);
-    let days_since_epoch =
-        chrono_04::Duration::try_days(get_days_since_epoch_from_date_column::<Self>(typ, v)?)
-            .ok_or_else(fail)?;
-    chrono_04::NaiveDate::from_ymd_opt(1970, 1, 1)
-        .unwrap()
-        .checked_add_signed(days_since_epoch)
-        .ok_or_else(fail)
-});
 
 #[cfg(feature = "time-03")]
 impl_emptiable_strict_type!(
@@ -524,21 +507,6 @@ impl_emptiable_strict_type!(
     }
 );
 
-#[cfg(feature = "chrono-04")]
-impl_emptiable_strict_type!(chrono_04::NaiveTime, Time, |typ: &'metadata ColumnType<
-    'metadata,
->,
-                                                         v: Option<
-    FrameSlice<'frame>,
->| {
-    let nanoseconds = get_nanos_from_time_column::<chrono_04::NaiveTime>(typ, v)?;
-
-    let naive_time: chrono_04::NaiveTime = CqlTime(nanoseconds)
-        .try_into()
-        .map_err(|_| mk_deser_err::<Self>(typ, BuiltinDeserializationErrorKind::ValueOverflow))?;
-    Ok(naive_time)
-});
-
 #[cfg(feature = "time-03")]
 impl_emptiable_strict_type!(
     time_03::Time,
@@ -570,24 +538,6 @@ impl_emptiable_strict_type!(
     |typ: &'metadata ColumnType<'metadata>, v: Option<FrameSlice<'frame>>| {
         let millis = get_millis_from_timestamp_column::<Self>(typ, v)?;
         Ok(CqlTimestamp(millis))
-    }
-);
-
-#[cfg(feature = "chrono-04")]
-impl_emptiable_strict_type!(
-    chrono_04::DateTime<chrono_04::Utc>,
-    Timestamp,
-    |typ: &'metadata ColumnType<'metadata>, v: Option<FrameSlice<'frame>>| {
-        use chrono_04::TimeZone as _;
-
-        let millis = get_millis_from_timestamp_column::<Self>(typ, v)?;
-        match chrono_04::Utc.timestamp_millis_opt(millis) {
-            chrono_04::LocalResult::Single(datetime) => Ok(datetime),
-            _ => Err(mk_deser_err::<Self>(
-                typ,
-                BuiltinDeserializationErrorKind::ValueOverflow,
-            )),
-        }
     }
 );
 

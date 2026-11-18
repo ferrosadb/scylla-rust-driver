@@ -65,8 +65,6 @@ jobs:
         run: cargo check --all-targets -p scylla --features "metrics"
       - name: Cargo check with secrecy-08 feature
         run: cargo check --all-targets -p scylla --features "secrecy-08"
-      - name: Cargo check with chrono-04 feature
-        run: cargo check --all-targets -p scylla --features "chrono-04"
       - name: Cargo check with time-03 feature
         run: cargo check --all-targets -p scylla --features "time-03"
       - name: Cargo check with num-bigint-03 feature

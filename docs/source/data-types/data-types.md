@@ -22,9 +22,9 @@ Database types and their Rust equivalents:
 * `Inet` <----> `std::net::IpAddr`
 * `Uuid` <----> `uuid::Uuid`
 * `Timeuuid` <----> `value::CqlTimeuuid`
-* `Date` <----> `value::CqlDate`, `chrono::NaiveDate`, `time::Date`
-* `Time` <----> `value::CqlTime`, `chrono::NaiveTime`, `time::Time`
-* `Timestamp` <----> `value::CqlTimestamp`, `chrono::DateTime<Utc>`, `time::OffsetDateTime`
+* `Date` <----> `value::CqlDate`, `time::Date`
+* `Time` <----> `value::CqlTime`, `time::Time`
+* `Timestamp` <----> `value::CqlTimestamp`, `time::OffsetDateTime`
 * `Duration` <----> `value::CqlDuration`
 * `Decimal` <----> `value::CqlDecimal`, `value::CqlDecimalBorrowed`, `bigdecimal::BigDecimal`
 * `Varint` <----> `value::CqlVarint`, `value::CqlVarintBorrowed`, `num_bigint::BigInt` (v0.3 and v0.4)
