@@ -1,7 +1,6 @@
 .vscode
 .zed
 target/
-Cargo.lock
 /book/book
 /docs/_build
 /docs/book
