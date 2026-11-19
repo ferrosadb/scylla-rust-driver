@@ -102,7 +102,7 @@ jiff = { version = "0.2", default-features = false, features = ["std"] }
 futures = "0.3.6"
 # Part of ReplicaSet::choose_filtered public API.
 # Used internally in some other places (mostly in LBP / routing).
-rand = "0.9.0"
+rand = "0.10"
 
 #####################
 # TLS implementations
@@ -132,15 +132,15 @@ dashmap = "6.0"
 # Required to set TCP keepalive on a socket.
 # Unfortunately, neither std nor tokio have this functionality yet,
 # so such workaround is required.
-socket2 = { version = "0.5.3", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 # Useful operations on iterators.
 itertools = "0.14.0"
 # Used by DefaultPolicy to have reproducible randomness.
-rand_pcg = "0.9.0"
+rand_pcg = "0.10"
 # Used in execution profiles and ClusterState.
 arc-swap = "1.3.0"
 # Used in tablets to have a hashmap queryable with borrowed key.
-hashbrown = "0.15"
+hashbrown = "0.17"
 # Used to avoid allocs when representing PK values / replica list.
 smallvec = "1.8.0"
 
@@ -153,7 +153,7 @@ criterion = "0.6"
 tokio = { version = "1.34", features = ["test-util", "process", "fs"] }
 tracing-subscriber = { version = "0.3.14", features = ["env-filter"] }
 assert_matches = "1.5.0"
-rand_chacha = "0.9.0"
+rand_chacha = "0.10"
 time = "0.3"
 anyhow = "1.0.98"
 tempfile = "3.19"

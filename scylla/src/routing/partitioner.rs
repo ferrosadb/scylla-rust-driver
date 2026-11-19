@@ -424,7 +424,7 @@ pub(crate) fn calculate_token_for_partition_key(
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
+    use rand::RngExt;
     use rand_pcg::Pcg32;
 
     use crate::test_utils::setup_tracing;
@@ -469,7 +469,7 @@ mod tests {
 
         // Splits the given data 2^n times and feeds partitioner with the chunks got.
         fn split_and_feed(
-            randgen: &mut impl Rng,
+            randgen: &mut impl RngExt,
             partitioner: &mut impl PartitionerHasher,
             data: &[u8],
             n: usize,
@@ -491,7 +491,7 @@ mod tests {
 
         fn check_for_partitioner<P: Partitioner>(
             partitioner: P,
-            randgen: &mut impl Rng,
+            randgen: &mut impl RngExt,
             input: &[u8],
         ) {
             let result_single_batch = partitioner.hash_one(input);

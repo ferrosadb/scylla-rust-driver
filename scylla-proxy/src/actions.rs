@@ -1,7 +1,7 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use rand::{Rng, RngCore};
+use rand::{Rng, RngExt};
 use tokio::sync::mpsc;
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ use crate::utils::safe_format::IteratorSafeFormatExt;
 
 use arc_swap::ArcSwap;
 use futures::{Future, FutureExt, StreamExt, future::RemoteHandle, stream::FuturesUnordered};
-use rand::Rng;
+use rand::RngExt;
 use std::convert::TryInto;
 use std::num::NonZeroUsize;
 use std::panic::{RefUnwindSafe, UnwindSafe};

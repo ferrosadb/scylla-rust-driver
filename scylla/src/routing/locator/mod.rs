@@ -17,7 +17,7 @@ pub(crate) mod tablets;
 pub(crate) mod test;
 mod token_ring;
 
-use rand::{Rng, seq::IteratorRandom};
+use rand::{RngExt, seq::IteratorRandom};
 use scylla_cql::frame::response::result::TableSpec;
 pub use token_ring::TokenRing;
 
@@ -319,7 +319,7 @@ impl<'a> ReplicaSet<'a> {
         predicate: impl Fn(&(NodeRef<'a>, Shard)) -> bool,
     ) -> Option<(NodeRef<'a>, Shard)>
     where
-        R: Rng + ?Sized,
+        R: RngExt + ?Sized,
     {
         let happy = self.choose(rng)?;
         if predicate(&happy) {
@@ -377,7 +377,7 @@ impl<'a> ReplicaSet<'a> {
 
     fn choose<R>(&self, rng: &mut R) -> Option<(NodeRef<'a>, Shard)>
     where
-        R: Rng + ?Sized,
+        R: RngExt + ?Sized,
     {
         let len = self.len();
         if len > 0 {

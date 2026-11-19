@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future, stream};
-use rand::Rng;
+use rand::RngExt;
 use scylla_cql::frame::response::result::{ColumnSpec, TableSpec};
 use scylla_cql::utils::parse::{ParseErrorCause, ParseResult, ParserState};
 use tracing::{debug, trace, warn};

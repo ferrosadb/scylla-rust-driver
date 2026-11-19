@@ -1,4 +1,4 @@
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use tracing::error;
 
 use super::{FallbackPlan, LoadBalancingPolicy, NodeRef, RoutingInfo};

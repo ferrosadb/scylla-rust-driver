@@ -1800,7 +1800,7 @@ mod tests {
     use assert_matches::assert_matches;
     use bytes::{BufMut, BytesMut};
     use futures::future::{join, join3};
-    use rand::RngCore;
+    use rand::Rng;
     use scylla_cql::frame::request::options;
     use scylla_cql::frame::request::{SerializableRequest as _, Startup};
     use scylla_cql::frame::types::write_string_multimap;

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rand::Rng;
+use rand::RngExt;
 use rand::rng;
 use scylla::client::execution_profile::ExecutionProfile;
 use scylla::client::session::Session;

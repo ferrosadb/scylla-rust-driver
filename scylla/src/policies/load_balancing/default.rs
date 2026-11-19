@@ -11,7 +11,7 @@ use crate::{
     routing::{Shard, Token},
 };
 use itertools::{Either, Itertools};
-use rand::{Rng, prelude::SliceRandom, rng};
+use rand::{RngExt, prelude::SliceRandom, rng};
 use rand_pcg::Pcg32;
 use scylla_cql::frame::response::result::TableSpec;
 use std::hash::{Hash, Hasher};
