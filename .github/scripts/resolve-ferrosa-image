@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Resolve which prebuilt ferrosa test-node image the cluster job runs against.
+
+    resolve-ferrosa-image --image ghcr.io/ferrosadb/ferrosa-test-node --github-output "$GITHUB_OUTPUT"
+    resolve-ferrosa-image --image ... --sha <paired-branch-sha> --src "paired ferrosa branch 'x'" ...
+
+ferrosa-memory never compiles ferrosa; ferrosa CI publishes ghcr.io/ferrosadb/ferrosa-test-node:<sha>
+for every main push. Since the post-merge release bot (ferrosa #572), main's HEAD is a
+`chore(release)` version bump for the ~12 minutes ferrosa CI takes to publish that commit's image,
+and pulling HEAD blindly failed every memory PR whose job started in that window (t_ac02eb08).
+
+Rules, walking ferrosa main by FIRST parent from HEAD (bounded by --max-walk):
+  1. A commit whose image exists is used.
+  2. A release-bot version bump (title `chore(release):` AND only Cargo.toml/Cargo.lock files) is
+     engine-identical to its parent, so it is skipped without waiting (::notice::).
+  3. An engine change whose image is not published yet is WAITED for while its ferrosa CI is still
+     running, within one wait budget (--wait-secs) shared across the walk.
+  4. An engine change whose CI finished without an image, or outlived the budget, is skipped with a
+     ::warning:: that says main's newest engine change is NOT covered by this run.
+  5. Nothing usable within --max-walk commits is an error.
+With --sha (a paired ferrosa branch) the commit is exact: wait for its image under rule 3, never
+substitute another. A registry or API error is never read as "no image": it is retried, then fatal.
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+
+REPO = "ferrosadb/ferrosa"
+CI_WORKFLOW = "CI"  # the ferrosa workflow whose build-node-image job ("Static Build (musl)") publishes the image
+BUMP_TITLE = "chore(release):"
+BUMP_FILE = re.compile(r"(^|/)Cargo\.(toml|lock)$")
+ABSENT = ("manifest unknown", "no such manifest", "not found")
+
+
+class ResolveError(Exception):
+    pass
+
+
+@dataclass
+class Resolution:
+    sha: str
+    src: str
+    notes: list = field(default_factory=list)  # (level, message): level is notice | warning
+
+
+def is_version_bump(commit):
+    title = commit["message"].split("\n", 1)[0]
+    files = commit["files"]
+    return title.startswith(BUMP_TITLE) and bool(files) and all(BUMP_FILE.search(f) for f in files)
+
+
+def classify_manifest(returncode, stderr):
+    """docker manifest inspect: True = published, False = definitively absent; else ResolveError."""
+    if returncode == 0:
+        return True
+    if any(s in stderr.lower() for s in ABSENT):
+        return False
+    raise ResolveError(f"registry error (not an absent image): {stderr.strip()[:300]}")
+
+
+def wait_for_image(ports, sha, deadline, poll_secs):
+    """True once sha's image exists; waits only while its CI is still running and before deadline."""
+    while True:
+        if ports.image_exists(sha):
+            return True
+        if ports.ci_status(sha) == "completed" or ports.monotonic() >= deadline:
+            return False
+        ports.sleep(poll_secs)
+
+
+def resolve_main(ports, wait_secs=1500, poll_secs=30, max_walk=10):
+    assert wait_secs >= 0 and poll_secs > 0 and max_walk > 0
+    deadline = ports.monotonic() + wait_secs
+    notes, sha, skipped = [], ports.main_head(), []
+    for _ in range(max_walk):
+        commit = ports.commit(sha)
+        title = commit["message"].split("\n", 1)[0]
+        if is_version_bump(commit):
+            if ports.image_exists(sha):
+                return _found(sha, skipped, notes)
+            notes.append(("notice", f"ferrosa main {sha[:12]} ({title}) is a version bump with no image yet; "
+                                    "using its parent, which has the same engine"))
+            skipped.append("version bump")
+        elif wait_for_image(ports, sha, deadline, poll_secs):
+            return _found(sha, skipped, notes)
+        else:
+            why = "its CI finished without one" if ports.ci_status(sha) == "completed" else \
+                f"it was not published within {wait_secs}s"
+            notes.append(("warning", f"ferrosa main {sha[:12]} ({title}) has no test-node image ({why}). "
+                                     "Testing against an older commit: this engine change is NOT covered by this run."))
+            skipped.append("engine change without an image")
+        if not commit["parents"]:
+            raise ResolveError(f"reached ferrosa's root commit without finding a published image (from {ports.main_head()[:12]})")
+        sha = commit["parents"][0]
+    raise ResolveError(f"no published test-node image within {max_walk} first-parent commits of ferrosa main")
+
+
+def _found(sha, skipped, notes):
+    src = "ferrosa main" if not skipped else f"ferrosa main, {len(skipped)} newer commit(s) skipped ({', '.join(skipped)})"
+    return Resolution(sha, src, notes)
+
+
+class GitHubPorts:
+    """The real GitHub API (gh) and registry (docker). Every call retries, then fails loud."""
+
+    def __init__(self, image, attempts=5, backoff=5):
+        self.image, self.attempts, self.backoff = image, attempts, backoff
+        self._head = None
+
+    def _run(self, args, ok=lambda p: p.returncode == 0):
+        last = None
+        for attempt in range(1, self.attempts + 1):
+            last = subprocess.run(args, capture_output=True, text=True)
+            if ok(last):
+                return last
+            print(f"{args[0]} {args[1]} failed (attempt {attempt}/{self.attempts}): {last.stderr.strip()[:200]}", flush=True)
+            time.sleep(self.backoff)
+        raise ResolveError(f"{' '.join(args[:3])} failed after {self.attempts} attempts: {last.stderr.strip()[:300]}")
+
+    def _api(self, path):
+        return json.loads(self._run(["gh", "api", path]).stdout)
+
+    def main_head(self):
+        if self._head is None:
+            self._head = self._api(f"repos/{REPO}/commits/main")["sha"]
+        return self._head
+
+    def commit(self, sha):
+        c = self._api(f"repos/{REPO}/commits/{sha}")
+        return {"message": c["commit"]["message"], "parents": [p["sha"] for p in c["parents"]],
+                "files": [f["filename"] for f in c.get("files", [])]}
+
+    def image_exists(self, sha):
+        def answered(p):
+            try:
+                classify_manifest(p.returncode, p.stderr)
+                return True
+            except ResolveError:
+                return False
+        p = self._run(["docker", "manifest", "inspect", f"{self.image}:{sha}"], ok=answered)
+        return classify_manifest(p.returncode, p.stderr)
+
+    def ci_status(self, sha):
+        runs = self._api(f"repos/{REPO}/actions/runs?head_sha={sha}&per_page=100")["workflow_runs"]
+        ci = [r["status"] for r in runs if r["name"] == CI_WORKFLOW]
+        # No run yet is how a just-pushed commit looks for its first seconds: still pending.
+        if not ci or any(s != "completed" for s in ci):
+            return "running"
+        return "completed"
+
+    def sleep(self, s):
+        time.sleep(s)
+
+    def monotonic(self):
+        return time.monotonic()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--image", required=True)
+    ap.add_argument("--sha", help="exact ferrosa commit (a paired branch); never substituted")
+    ap.add_argument("--src", default="", help="label for --sha")
+    ap.add_argument("--github-output", help="file to append sha= and src= to")
+    ap.add_argument("--wait-secs", type=int, default=1500)
+    ap.add_argument("--poll-secs", type=int, default=30)
+    ap.add_argument("--max-walk", type=int, default=10)
+    a = ap.parse_args(argv)
+    ports = GitHubPorts(a.image)
+    try:
+        if a.sha:
+            if not wait_for_image(ports, a.sha, ports.monotonic() + a.wait_secs, a.poll_secs):
+                raise ResolveError(f"{a.image}:{a.sha} ({a.src}) is not published and its ferrosa CI is not "
+                                   "producing it. Let that branch's CI finish (or fix it), then re-run.")
+            r = Resolution(a.sha, a.src)
+        else:
+            r = resolve_main(ports, a.wait_secs, a.poll_secs, a.max_walk)
+    except ResolveError as e:
+        print(f"::error::{e}")
+        print("::error::ferrosa-memory does NOT compile ferrosa; it only consumes prebuilt test-node images.")
+        return 1
+    for level, msg in r.notes:
+        print(f"::{level}::{msg}")
+    print(f"::notice::Resolved ferrosa image to {a.image}:{r.sha} ({r.src})")
+    if a.github_output:
+        with open(a.github_output, "a", encoding="utf-8") as fh:
+            fh.write(f"sha={r.sha}\nsrc={r.src}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
