@@ -295,7 +295,7 @@ impl Tablet {
         if any_updated {
             // Now that we know we have some nodes to update we need to go over
             // per-dc nodes and update them too.
-            for (_, dc_nodes) in self.replicas.per_dc.iter_mut() {
+            for dc_nodes in self.replicas.per_dc.values_mut() {
                 for (node, _) in dc_nodes.iter_mut() {
                     if let Some(new_node) = recreated_nodes.get(&node.host_id) {
                         *node = Arc::clone(new_node);
@@ -541,42 +541,42 @@ impl TabletsInfo {
     /// we avoid iterating through tablets at all if steps 2-4 can be skipped.
     ///
     /// * `removed_nodes`: Nodes that previously were present in ClusterData but are not anymore.
-    ///                    For any such node we should remove all tablets that have it in replica list.
-    ///                    This is because otherwise:
-    ///                    1. We would keep old `Node` objects, not allowing them to release memory.
-    ///                    2. We would return removed nodes in LBP
-    ///                    3. When a new node joins and becomes replica for this tablet, we would
-    ///                       not use it - instead we would keep querying a subset of replicas.
+    ///   For any such node we should remove all tablets that have it in replica list.
+    ///   This is because otherwise:
+    ///   1. We would keep old `Node` objects, not allowing them to release memory.
+    ///   2. We would return removed nodes in LBP
+    ///   3. When a new node joins and becomes replica for this tablet, we would
+    ///      not use it - instead we would keep querying a subset of replicas.
     ///
     /// * `all_current_nodes`: Map of all nodes. Required to remap unknown replicas.
-    ///                        If we didn't try to remap them and instead just skipped them,
-    ///                        then we would only query subset of replicas for the tablet,
-    ///                        potentially increasing load on those replicas.
-    ///                        The alternative is dropping the tablet immediately, but if there are a lot
-    ///                        of requests to a range belonging to this tablet, then we would get a
-    ///                        lot of unnecessary feedbacks sent. Thus the current solution:
-    ///                        skipping unknown replicas and dropping the tablet if we still can't resolve
-    ///                        them after topology refresh.
+    ///   If we didn't try to remap them and instead just skipped them,
+    ///   then we would only query subset of replicas for the tablet,
+    ///   potentially increasing load on those replicas.
+    ///   The alternative is dropping the tablet immediately, but if there are a lot
+    ///   of requests to a range belonging to this tablet, then we would get a
+    ///   lot of unnecessary feedbacks sent. Thus the current solution:
+    ///   skipping unknown replicas and dropping the tablet if we still can't resolve
+    ///   them after topology refresh.
     ///
     /// * `recreated_nodes`: There are some situations (IP change, DC / Rack change) where the driver
-    ///                      will create a new `Node` object for some node and drop the old one.
-    ///                      Tablet info would still contain the old object, so the driver would not use
-    ///                      new connections. That means if there were such nodes then we need to go over
-    ///                      tablets and replace `Arc<Node>` objects for recreated nodes.
+    ///   will create a new `Node` object for some node and drop the old one.
+    ///   Tablet info would still contain the old object, so the driver would not use
+    ///   new connections. That means if there were such nodes then we need to go over
+    ///   tablets and replace `Arc<Node>` objects for recreated nodes.
     ///
     /// There are some situations not handled by this maintanance procedure that could
     /// still result in permanent difference between local and real tablet info:
     ///
     /// * Extending replica list for a tablet: If a new replica is added to replica list,
-    ///     then we won't learn about it, because we'll keep querying current replicas, which are
-    ///     still replicas. I'm not sure if this can happen. The only scenario where this seems
-    ///     possible is increasing RF - I'm not sure if this would only add replicas or make more changes.
-    ///     We could probably discover it by comparing replication strategy pre and post topology referesh
-    ///     and if it changed then remove tablet info for this keyspace.
+    ///   then we won't learn about it, because we'll keep querying current replicas, which are
+    ///   still replicas. I'm not sure if this can happen. The only scenario where this seems
+    ///   possible is increasing RF - I'm not sure if this would only add replicas or make more changes.
+    ///   We could probably discover it by comparing replication strategy pre and post topology referesh
+    ///   and if it changed then remove tablet info for this keyspace.
     ///
     /// * Removing the keyspace and recreating it immediately without tablets. This seems so absurd
-    ///     that we most likely don't need to worry about it, but I'm putting it here as a potential problem
-    ///     for completeness.
+    ///   that we most likely don't need to worry about it, but I'm putting it here as a potential problem
+    ///   for completeness.
     pub(crate) fn perform_maintenance(
         &mut self,
         table_predicate: &impl Fn(&TableSpec) -> bool,
