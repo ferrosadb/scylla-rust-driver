@@ -354,4 +354,81 @@ mod tests {
             "{foo:123,bar:321}"
         );
     }
+
+    /// `date` is days since the epoch, offset by 2^31.
+    fn date_at(days_since_epoch: i64) -> String {
+        let raw = u32::try_from(days_since_epoch + (1 << 31)).unwrap();
+        format!("{}", CqlValueDisplayer(CqlValue::Date(CqlDate(raw))))
+    }
+
+    fn timestamp_at(millis: i64) -> String {
+        format!("{}", CqlValueDisplayer(CqlValue::Timestamp(CqlTimestamp(millis))))
+    }
+
+    const MILLIS_PER_DAY: i64 = 86_400_000;
+
+    // These strings were taken from the chrono implementation before it was
+    // replaced, so the replacement is held to printing the same bytes.
+    #[test]
+    fn date_display_is_pinned() {
+        assert_eq!(date_at(0), "'1970-01-01'");
+        assert_eq!(date_at(-1), "'1969-12-31'");
+        assert_eq!(date_at(11_016), "'2000-02-29'");
+        assert_eq!(date_at(12_875), "'2005-04-02'");
+        assert_eq!(date_at(-719_528), "'0000-01-01'");
+        assert_eq!(date_at(-719_529), "'-0001-12-31'");
+        assert_eq!(date_at(2_932_896), "'9999-12-31'");
+        assert_eq!(date_at(-4_371_587), "'-9999-01-01'");
+        // The extremes of the `date` type are far outside any calendar library.
+        assert_eq!(
+            date_at((1 << 31) - 1),
+            "<date out of representable range>"
+        );
+        assert_eq!(date_at(-(1 << 31)), "<date out of representable range>");
+    }
+
+    #[test]
+    fn timestamp_display_is_pinned() {
+        assert_eq!(timestamp_at(0), "'1970-01-01 00:00:00.000+0000'");
+        assert_eq!(timestamp_at(-1), "'1969-12-31 23:59:59.999+0000'");
+        assert_eq!(timestamp_at(1), "'1970-01-01 00:00:00.001+0000'");
+        assert_eq!(
+            timestamp_at(1_112_470_662_042),
+            "'2005-04-02 19:37:42.042+0000'"
+        );
+        assert_eq!(
+            timestamp_at(11_016 * MILLIS_PER_DAY + 86_399_999),
+            "'2000-02-29 23:59:59.999+0000'"
+        );
+        assert_eq!(
+            timestamp_at(-719_528 * MILLIS_PER_DAY),
+            "'0000-01-01 00:00:00.000+0000'"
+        );
+        assert_eq!(
+            timestamp_at(-719_528 * MILLIS_PER_DAY - 1),
+            "'-0001-12-31 23:59:59.999+0000'"
+        );
+        assert_eq!(
+            timestamp_at(2_932_897 * MILLIS_PER_DAY - 1),
+            "'9999-12-31 23:59:59.999+0000'"
+        );
+        assert_eq!(
+            timestamp_at(-4_371_587 * MILLIS_PER_DAY),
+            "'-9999-01-01 00:00:00.000+0000'"
+        );
+        assert_eq!(timestamp_at(i64::MAX), "<timestamp out of representable range>");
+        assert_eq!(timestamp_at(i64::MIN), "<timestamp out of representable range>");
+    }
+
+    // Years past 9999 in either direction: chrono printed them, jiff's civil
+    // calendar stops at +/-9999. Pinned separately so the difference is visible.
+    #[test]
+    fn dates_beyond_year_9999() {
+        assert_eq!(date_at(2_932_897), "'+10000-01-01'");
+        assert_eq!(date_at(-4_371_588), "'-10000-12-31'");
+        assert_eq!(
+            timestamp_at(2_932_897 * MILLIS_PER_DAY),
+            "'+10000-01-01 00:00:00.000+0000'"
+        );
+    }
 }

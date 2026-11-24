@@ -462,21 +462,22 @@ mod tests {
         SpeculativeId, StructuredHistory, TimePoint,
     };
     use assert_matches::assert_matches;
-    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+    use chrono::{DateTime, Utc};
     use scylla_cql::Consistency;
 
     // Set a single time for all timestamps within StructuredHistory.
     // HistoryCollector sets the timestamp to current time which changes with each test.
     // Setting it to one makes it possible to test displaying consistently.
-    fn set_one_time(mut history: StructuredHistory) -> StructuredHistory {
-        let the_time: TimePoint = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDateTime::new(
-                NaiveDate::from_ymd_opt(2022, 2, 22).unwrap(),
-                NaiveTime::from_hms_opt(20, 22, 22).unwrap(),
-            ),
-            Utc,
-        );
+    fn set_one_time(history: StructuredHistory) -> StructuredHistory {
+        // 2022-02-22 20:22:22 UTC
+        set_time(history, time_point(1_645_561_342, 0))
+    }
 
+    fn time_point(unix_secs: i64, nanos: u32) -> TimePoint {
+        DateTime::<Utc>::from_timestamp(unix_secs, nanos).unwrap()
+    }
+
+    fn set_time(mut history: StructuredHistory, the_time: TimePoint) -> StructuredHistory {
         for query in &mut history.queries {
             query.start_time = the_time;
             match &mut query.result {
@@ -532,6 +533,44 @@ mod tests {
 
     fn no_stream_id_error() -> QueryError {
         QueryError::UnableToAllocStreamId
+    }
+
+    fn start_time_line(the_time: TimePoint) -> String {
+        let history_collector = HistoryCollector::new();
+        let _query_id: QueryId = history_collector.log_query_start();
+        let history = set_time(history_collector.clone_structured_history(), the_time);
+        format!("{}", history)
+            .lines()
+            .find(|line| line.starts_with("| start_time: "))
+            .unwrap()
+            .to_owned()
+    }
+
+    // Pinned from chrono's `DateTime<Utc>` Display before `TimePoint` became
+    // `SystemTime`: the fraction is omitted when zero and otherwise printed
+    // at millisecond, microsecond or nanosecond width, whichever is exact.
+    #[test]
+    fn time_point_display_is_pinned() {
+        setup_tracing();
+        let at = |secs, nanos| start_time_line(time_point(secs, nanos));
+        assert_eq!(at(1_645_561_342, 0), "| start_time: 2022-02-22 20:22:22 UTC");
+        assert_eq!(
+            at(1_645_561_342, 120_000_000),
+            "| start_time: 2022-02-22 20:22:22.120 UTC"
+        );
+        assert_eq!(
+            at(1_645_561_342, 123_450_000),
+            "| start_time: 2022-02-22 20:22:22.123450 UTC"
+        );
+        assert_eq!(
+            at(1_645_561_342, 1),
+            "| start_time: 2022-02-22 20:22:22.000000001 UTC"
+        );
+        assert_eq!(at(0, 0), "| start_time: 1970-01-01 00:00:00 UTC");
+        assert_eq!(
+            at(-1, 999_999_999),
+            "| start_time: 1969-12-31 23:59:59.999999999 UTC"
+        );
     }
 
     #[test]
