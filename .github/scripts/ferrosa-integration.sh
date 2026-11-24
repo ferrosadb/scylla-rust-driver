@@ -4,8 +4,8 @@
 #   ferrosa-integration.sh <binaries-file>   start node + box, run every test binary
 #   ferrosa-integration.sh --teardown        remove what a run started
 #
-# The runner is a shared workstation with a live ferrosa-memory cluster on it,
-# so nothing here touches the host network:
+# Nothing here touches the runner's own network, so the script is safe on any
+# host (it also runs on a dev machine with a live ferrosa cluster):
 #
 #   * the node ($CI_NAME-node, image tag ferrosa-node:$CI_NAME) runs on
 #     docker's default bridge with NO published ports, standalone, auth off,

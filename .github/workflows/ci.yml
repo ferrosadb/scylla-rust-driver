@@ -9,18 +9,10 @@ name: CI
 # or test at all; the only checks that ran were pull_request_target workflows
 # read from the default branch (Semver checks, Sync Jira).
 #
-# Where these jobs run: Ferrosa's own Linux runners, `[self-hosted, Linux, X64]`.
-# They are persistent, shared workstations, not throwaway VMs, so every Rust
-# job runs ./.github/actions/persistent-host right after checkout (it points
-# HOME, CARGO_HOME, RUSTUP_HOME, CARGO_TARGET_DIR and DOCKER_CONFIG at
-# runner-owned directories; its header says why), and every job carries
-# timeout-minutes.
-#
-# Fork pull requests: this repository is PUBLIC. The `if:` on each job skips
-# fork PRs so they do not queue for a runner, and ci-pass then fails, naming
-# why. That `if:` is NOT a security boundary: a fork PR can edit this file.
-# What keeps fork code off the runners is the repository's fork-PR approval
-# policy and the runner group's repository access, both outside this file.
+# Where these jobs run: GitHub-hosted runners. This repository is public, and
+# Ferrosa's rule for public repos is hosted runners only: fork pull requests
+# run here, and fork code must never reach Ferrosa's self-hosted machines.
+# Hosted minutes are free for public repositories.
 on:
   push:
     branches: [main, 'ferrosa/**']
@@ -40,46 +32,36 @@ env:
   RUST_BACKTRACE: "1"
   # Same toolchain as ferrosa-memory, which builds this crate.
   RUST_TOOLCHAIN: "1.98.0"
-  # The self-hosted runner containers are capped at 7.5 GB and the runner's
-  # .env sets CARGO_BUILD_JOBS=8. This workspace's largest crates (scylla,
-  # scylla-cql) peak well under 1.5 GB per rustc, so four at once leaves room
-  # for the linker; eight could not be guaranteed.
-  CARGO_BUILD_JOBS: "4"
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   guard:
     name: Verify SHA pins
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Every action is SHA-pinned
         run: bash .github/scripts/check-actions-pinned.sh
-      - name: Runner guard tests
-        run: bash .github/scripts/test-check-no-hosted-runners.sh
-      - name: No GitHub-hosted runners
-        run: bash .github/scripts/check-no-hosted-runners.sh
 
   lint-build-test:
     name: Format, clippy, build, unit and doc tests
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Isolate the persistent runner's home, toolchains and docker config
-        uses: ./.github/actions/persistent-host
-        with:
-          check-docker-root: "false"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04-25
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Save from the long-lived branches only; a PR-scoped cache can never
+          # be restored by another ref and only evicts the useful ones.
+          save-if: ${{ github.event_name == 'push' }}
       - name: Format check
         run: cargo fmt --all -- --check
       # The features our products enable: ferrosa-memory uses `ssl`; chrono
@@ -100,8 +82,7 @@ jobs:
 
   semver:
     name: Semver check against the base
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
       run:
@@ -110,17 +91,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Isolate the persistent runner's home, toolchains and docker config
-        uses: ./.github/actions/persistent-host
-        with:
-          check-docker-root: "false"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04-25
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Install cargo-semver-checks
         uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
-        env:
-          CARGO_HOME: ${{ env.CARGO_INSTALL_ROOT || env.CARGO_HOME }}
         with:
           tool: cargo-semver-checks@0.51.0
       # Blocking, with no label involved. A deliberate API break passes by
@@ -148,12 +123,12 @@ jobs:
 
   # Against a real ferrosa node: the server our products talk to. NOT part of
   # ci-pass yet: its skip lists were first measured on macOS and are being
-  # confirmed on Linux. See .github/scripts/ferrosa-integration.sh for how the
-  # node and the tests are isolated from the shared host.
+  # confirmed on Linux, and the node image (ghcr.io/ferrosadb/ferrosa-test-node)
+  # is a private package that this repository's GITHUB_TOKEN can pull only if
+  # the package grants it read access. See .github/scripts/ferrosa-integration.sh.
   integration:
     name: Integration tests against a ferrosa node
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
@@ -218,13 +193,12 @@ jobs:
         cql_value::test_cqlvalue_duration                           # negative duration literal
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Isolate the persistent runner's home, toolchains and docker config
-        uses: ./.github/actions/persistent-host
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04-25
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - name: Host prerequisites
-        run: bash .github/scripts/require-host-tools.sh docker=docker.io python3=python3 gh=gh
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'push' }}
       - name: Build the test binaries
         run: |
           set -euo pipefail
@@ -265,19 +239,14 @@ jobs:
     name: CI Pass
     if: always()
     needs: [guard, lint-build-test, semver]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Every required job succeeded
         env:
           RESULTS: ${{ toJSON(needs) }}
-          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
-          if [ "$FORK" = "true" ]; then
-            echo "::error::fork pull requests do not run on Ferrosa's self-hosted runners. A maintainer must push the branch to ferrosadb/scylla-rust-driver and open the PR from there."
-            exit 1
-          fi
           echo "$RESULTS" | python3 -c 'import sys,json
           bad={k:v["result"] for k,v in json.load(sys.stdin).items() if v["result"]!="success"}
           if bad:
