@@ -1555,7 +1555,7 @@ impl Connection {
 
     async fn router(
         config: ConnectionConfig,
-        stream: (impl AsyncRead + AsyncWrite),
+        stream: impl AsyncRead + AsyncWrite,
         receiver: mpsc::Receiver<Task>,
         error_sender: tokio::sync::oneshot::Sender<ConnectionError>,
         orphan_notification_receiver: mpsc::UnboundedReceiver<RequestId>,
@@ -1620,7 +1620,7 @@ impl Connection {
     }
 
     async fn reader(
-        mut read_half: (impl AsyncRead + Unpin),
+        mut read_half: impl AsyncRead + Unpin,
         handler_map: &StdMutex<ResponseHandlerMap>,
         config: ConnectionConfig,
     ) -> Result<(), BrokenConnectionError> {
@@ -1704,7 +1704,7 @@ impl Connection {
     }
 
     async fn writer(
-        mut write_half: (impl AsyncWrite + Unpin),
+        mut write_half: impl AsyncWrite + Unpin,
         handler_map: &StdMutex<ResponseHandlerMap>,
         mut task_receiver: mpsc::Receiver<Task>,
         enable_write_coalescing: bool,

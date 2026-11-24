@@ -46,14 +46,14 @@ impl<'a> RowSerializationContext<'a> {
 
     /// Returns column/bind marker specifications for given query.
     #[inline]
-    pub fn columns(&self) -> &'a [ColumnSpec] {
+    pub fn columns(&self) -> &'a [ColumnSpec<'_>] {
         self.columns
     }
 
     /// Looks up and returns a column/bind marker by name.
     // TODO: change RowSerializationContext to make this faster
     #[inline]
-    pub fn column_by_name(&self, target: &str) -> Option<&ColumnSpec> {
+    pub fn column_by_name(&self, target: &str) -> Option<&ColumnSpec<'_>> {
         self.columns.iter().find(|&c| c.name() == target)
     }
 }
@@ -802,7 +802,7 @@ impl SerializedValues {
 
     /// Returns an iterator over the values serialized into the object so far.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = RawValue> {
+    pub fn iter(&self) -> impl Iterator<Item = RawValue<'_>> {
         SerializedValuesIterator {
             serialized_values: &self.serialized_values,
         }

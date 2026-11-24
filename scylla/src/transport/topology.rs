@@ -1102,7 +1102,7 @@ async fn query_user_defined_types(
 
         let mut fields = Vec::with_capacity(field_names.len());
 
-        for (field_name, field_type) in field_names.into_iter().zip(field_types.into_iter()) {
+        for (field_name, field_type) in field_names.into_iter().zip(field_types) {
             let cql_type = field_type.into_cql_type(&keyspace_name, &udts);
             fields.push((field_name, cql_type));
         }
@@ -1657,7 +1657,7 @@ fn parse_native_type(p: ParserState) -> ParseResult<(NativeType, ParserState)> {
     Ok((typ, p))
 }
 
-fn parse_user_defined_type(p: ParserState) -> ParseResult<(&str, ParserState)> {
+fn parse_user_defined_type(p: ParserState<'_>) -> ParseResult<(&str, ParserState<'_>)> {
     // Java identifiers allow letters, underscores and dollar signs at any position
     // and digits in non-first position. Dots are accepted here because the names
     // are usually fully qualified.

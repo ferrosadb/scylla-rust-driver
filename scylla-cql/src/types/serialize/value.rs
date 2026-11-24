@@ -320,9 +320,7 @@ impl<const N: usize> SerializeValue for [u8; N] {
 /// a parallel `Vec<f32>` API surface; the read side already returns
 /// `CqlValue::List<CqlValue::Float>` (see `parse_cassandra_vector_type` in
 /// `frame/response/result.rs`).
-fn blob_or_cassandra_vector_typeck<T>(
-    typ: &ColumnType,
-) -> Result<(), SerializationError> {
+fn blob_or_cassandra_vector_typeck<T>(typ: &ColumnType) -> Result<(), SerializationError> {
     match typ {
         ColumnType::Blob => Ok(()),
         ColumnType::Custom(class)

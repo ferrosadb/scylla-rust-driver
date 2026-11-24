@@ -575,7 +575,7 @@ impl QueryPager {
     /// borrows from self.
     ///
     /// This is cancel-safe.
-    async fn next(&mut self) -> Option<Result<ColumnIterator, QueryError>> {
+    async fn next(&mut self) -> Option<Result<ColumnIterator<'_, '_>, QueryError>> {
         let res = std::future::poll_fn(|cx| Pin::new(&mut *self).poll_fill_page(cx)).await;
         match res {
             Some(Ok(())) => {}
@@ -1015,7 +1015,7 @@ impl<RowT> TypedRowStream<RowT> {
 
     /// Returns specification of row columns
     #[inline]
-    pub fn column_specs(&self) -> ColumnSpecs {
+    pub fn column_specs(&self) -> ColumnSpecs<'_> {
         self.raw_row_lending_stream.column_specs()
     }
 }

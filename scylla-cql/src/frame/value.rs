@@ -783,7 +783,7 @@ mod legacy {
             Ok(())
         }
 
-        pub fn iter(&self) -> impl Iterator<Item = RawValue> {
+        pub fn iter(&self) -> impl Iterator<Item = RawValue<'_>> {
             LegacySerializedValuesIterator {
                 serialized_values: &self.serialized_values,
                 contains_names: self.contains_names,
@@ -807,7 +807,7 @@ mod legacy {
             self.serialized_values.len()
         }
 
-        pub fn iter_name_value_pairs(&self) -> impl Iterator<Item = (Option<&str>, RawValue)> {
+        pub fn iter_name_value_pairs(&self) -> impl Iterator<Item = (Option<&str>, RawValue<'_>)> {
             let mut buf = &self.serialized_values[..];
             (0..self.values_num).map(move |_| {
                 // `unwrap()`s here are safe, as we assume type-safety: if `LegacySerializedValues` exits,
