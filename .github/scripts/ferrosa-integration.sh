@@ -9,7 +9,9 @@
 #
 #   * the node ($CI_NAME-node, image tag ferrosa-node:$CI_NAME) runs on
 #     docker's default bridge with NO published ports, standalone, auth off,
-#     local storage only (no S3);
+#     local storage only (no S3). Its CQL binds 127.0.0.1:9042, not 0.0.0.0:
+#     the scylla-proxy tests bind 127.0.x.y:9042 in the same namespace, and a
+#     wildcard bind refuses them with EADDRINUSE;
 #   * the tests run in "the box" ($CI_NAME-box), which joins the NODE'S network
 #     namespace (--network container:...). Inside it 127.0.0.1:9042 is this
 #     run's node and nothing else, and the scylla-proxy tests' 127.0.0.x
@@ -88,7 +90,7 @@ docker run -d --name "$node" --label scylla-ci="$CI_NAME" \
   -e FERROSA_HOST_ID=91111111-1111-1111-1111-111111111111 \
   -e FERROSA_DATA_DIR=/var/lib/ferrosa \
   -e FERROSA_AUTH_DISABLED=true \
-  -e FERROSA_CQL_BIND=0.0.0.0:9042 \
+  -e FERROSA_CQL_BIND=127.0.0.1:9042 \
   -e FERROSA_CQL_BROADCAST=127.0.0.1:9042 \
   -e FERROSA_GRAPH_ENABLED=false \
   -e FERROSA_SPARQL_ENABLED=false \

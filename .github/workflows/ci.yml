@@ -135,6 +135,9 @@ jobs:
       # configured by FERROSA_* env), built nightly from main. Pulls
       # anonymously, so fork PRs can run this job too.
       FERROSA_IMAGE: ghcr.io/ferrosadb/ferrosa:nightly
+      # Read at COMPILE time (option_env!) by the CDC-partitioner tests, which
+      # then skip their Scylla-only CDC half, as upstream's Cassandra run does.
+      CDC: disabled
       CI_NAME: scyci-${{ github.run_id }}-${{ github.run_attempt }}
       # Ubuntu 24.04 like the runner host, so host-built test binaries (glibc
       # only: they are built without `ssl`) run inside it. Ours, by digest.
