@@ -52,7 +52,9 @@ fi
 
 binaries="${1:?usage: $0 <binaries-file> | --teardown}"
 [ -s "$binaries" ] || die "binaries file '$binaries' is empty or missing"
-: "${CI_BOX_IMAGE:?}" "${GITHUB_WORKSPACE:?}" "${RUNNER_TEMP:?}" "${CARGO_TARGET_DIR:?}"
+: "${CI_BOX_IMAGE:?}" "${GITHUB_WORKSPACE:?}" "${RUNNER_TEMP:?}"
+# Unset on a hosted runner: cargo's default, target/ in the workspace.
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
 
 # --- parse the skip lists -------------------------------------------------
 skips=()
