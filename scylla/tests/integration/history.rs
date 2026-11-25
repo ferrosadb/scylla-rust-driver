@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use futures::StreamExt;
 use scylla::frame::response::result::Row;
 use scylla::history::{
@@ -16,13 +16,8 @@ use crate::utils::{create_new_session_builder, setup_tracing, unique_keyspace_na
 // HistoryCollector sets the timestamp to current time which changes with each test.
 // Setting it to one makes it possible to test displaying consistently.
 fn set_one_time(mut history: StructuredHistory) -> StructuredHistory {
-    let the_time: TimePoint = DateTime::<Utc>::from_naive_utc_and_offset(
-        NaiveDateTime::new(
-            NaiveDate::from_ymd_opt(2022, 2, 22).unwrap(),
-            NaiveTime::from_hms_opt(20, 22, 22).unwrap(),
-        ),
-        Utc,
-    );
+    // 2022-02-22 20:22:22 UTC
+    let the_time: TimePoint = UNIX_EPOCH + Duration::from_secs(1_645_561_342);
 
     for query in &mut history.queries {
         query.start_time = the_time;

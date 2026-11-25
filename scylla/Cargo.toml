@@ -2,7 +2,7 @@
 name = "scylla"
 version = "0.15.1"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.85"  # jiff 1.x
 description = "Async CQL driver for Rust, optimized for Scylla, fully compatible with Apache Cassandra™"
 repository = "https://github.com/scylladb/scylla-rust-driver"
 readme = "../README.md"
@@ -62,7 +62,10 @@ rand = "0.8.3"
 thiserror = "2.0.6"
 itertools = "0.13.0"
 tracing = "0.1.36"
-chrono = { version = "0.4.32", default-features = false, features = ["clock"] }
+# Calendar arithmetic for pretty-printing `date`, `timestamp` and query history
+# times. chrono is unmaintained (RUSTSEC-2026-0543); it remains available as
+# the opt-in `chrono-04` feature for CQL ser/de, which lives in scylla-cql.
+jiff = { version = "1", default-features = false }
 openssl = { version = "0.10.32", optional = true }
 tokio-openssl = { version = "0.6.1", optional = true }
 arc-swap = "1.3.0"
@@ -79,6 +82,9 @@ socket2 = { version = "0.5.3", features = ["all"] }
 lazy_static = "1"
 
 [dev-dependencies]
+# The chrono-04 integration tests (tests/integration/cql_types.rs) name chrono
+# directly.
+chrono = { version = "0.4.32", default-features = false, features = ["clock"] }
 num-bigint-03 = { package = "num-bigint", version = "0.3" }
 num-bigint-04 = { package = "num-bigint", version = "0.4" }
 bigdecimal-04 = { package = "bigdecimal", version = "0.4" }
