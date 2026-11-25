@@ -142,15 +142,15 @@ impl_from_cql_value_from_method!(f32, as_float); // f32::from_cql<CqlValue>
 impl_from_cql_value_from_method!(f64, as_double); // f64::from_cql<CqlValue>
 impl_from_cql_value_from_method!(bool, as_boolean); // bool::from_cql<CqlValue>
 impl_from_cql_value_from_method!(String, into_string); // String::from_cql<CqlValue>
-// Vec<u8>::from_cql<CqlValue> — manual impl rather than the
-// into_blob-only macro variant so it also accepts the
-// `CqlValue::List<Float|Double|Int|BigInt>` shape that
-// `deser_cql_value` constructs for Cassandra CEP-30
-// `VectorType(<inner>, <dim>)` columns. Reassemble the wire bytes
-// (big-endian, no per-element length prefix) so legacy
-// `FromCqlVal<Vec<u8>>` consumers see the raw stream they expect.
-// Symmetric with the typed-API patches in
-// `types/{serialize,deserialize}/value.rs`.
+                                                       // Vec<u8>::from_cql<CqlValue> — manual impl rather than the
+                                                       // into_blob-only macro variant so it also accepts the
+                                                       // `CqlValue::List<Float|Double|Int|BigInt>` shape that
+                                                       // `deser_cql_value` constructs for Cassandra CEP-30
+                                                       // `VectorType(<inner>, <dim>)` columns. Reassemble the wire bytes
+                                                       // (big-endian, no per-element length prefix) so legacy
+                                                       // `FromCqlVal<Vec<u8>>` consumers see the raw stream they expect.
+                                                       // Symmetric with the typed-API patches in
+                                                       // `types/{serialize,deserialize}/value.rs`.
 impl FromCqlVal<CqlValue> for Vec<u8> {
     fn from_cql(cql_val: CqlValue) -> Result<Self, FromCqlValError> {
         match cql_val {

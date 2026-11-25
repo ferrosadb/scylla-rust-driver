@@ -1227,8 +1227,7 @@ fn deser_prepared_metadata(
     for i in 0..pk_count {
         pk_indexes.push(PartitionKeyIndex {
             index: types::read_short(buf)
-                .map_err(|err| PreparedMetadataParseError::PkIndexParseError(err.into()))?
-                as u16,
+                .map_err(|err| PreparedMetadataParseError::PkIndexParseError(err.into()))?,
             sequence: i as u16,
         });
     }
@@ -1319,11 +1318,14 @@ fn vector_read_i8(buf: &mut &[u8]) -> Option<CqlValue> {
     Some(CqlValue::TinyInt(v))
 }
 
+/// Reads one fixed-size vector element and advances the buffer past it.
+type VectorElementReader = fn(&mut &[u8]) -> Option<CqlValue>;
+
 /// Map a Cassandra inner-type marshaller class to a per-element reader.
 /// Returns `None` for inner types we don't yet support (UDTs, text,
 /// variable-size encodings) — those fall back to the existing
 /// `CustomTypeNotSupported` error path.
-fn vector_element_reader(inner_class: &str) -> Option<fn(&mut &[u8]) -> Option<CqlValue>> {
+fn vector_element_reader(inner_class: &str) -> Option<VectorElementReader> {
     match inner_class {
         "org.apache.cassandra.db.marshal.FloatType" => Some(vector_read_f32),
         "org.apache.cassandra.db.marshal.DoubleType" => Some(vector_read_f64),
@@ -1903,7 +1905,10 @@ mod tests {
         );
         let buf: Vec<u8> = vec![0u8; 8];
         let res = super::deser_cql_value(&typ, &mut &buf[..]);
-        assert!(res.is_err(), "truncated vector buffer must error, not panic");
+        assert!(
+            res.is_err(),
+            "truncated vector buffer must error, not panic"
+        );
     }
 
     #[test]

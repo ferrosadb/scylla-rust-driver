@@ -575,7 +575,7 @@ impl QueryPager {
     /// borrows from self.
     ///
     /// This is cancel-safe.
-    async fn next(&mut self) -> Option<Result<ColumnIterator, QueryError>> {
+    async fn next(&mut self) -> Option<Result<ColumnIterator<'_, '_>, QueryError>> {
         let res = std::future::poll_fn(|cx| Pin::new(&mut *self).poll_fill_page(cx)).await;
         match res {
             Some(Ok(())) => {}
@@ -593,8 +593,8 @@ impl QueryPager {
     }
 
     /// Tries to acquire a non-empty page, if current page is exhausted.
-    fn poll_fill_page<'r>(
-        mut self: Pin<&'r mut Self>,
+    fn poll_fill_page(
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<(), QueryError>>> {
         if !self.is_current_page_exhausted() {
@@ -616,8 +616,8 @@ impl QueryPager {
     /// On success, returns Some(Ok()).
     /// On failure, returns Some(Err()).
     /// If there are no more pages, returns None.
-    fn poll_next_page<'r>(
-        mut self: Pin<&'r mut Self>,
+    fn poll_next_page(
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<(), QueryError>>> {
         let mut s = self.as_mut();
@@ -1015,7 +1015,7 @@ impl<RowT> TypedRowStream<RowT> {
 
     /// Returns specification of row columns
     #[inline]
-    pub fn column_specs(&self) -> ColumnSpecs {
+    pub fn column_specs(&self) -> ColumnSpecs<'_> {
         self.raw_row_lending_stream.column_specs()
     }
 }

@@ -5,7 +5,7 @@ use crate::transport::connection::Connection;
 use crate::transport::errors::QueryError;
 use crate::transport::session_builder::{GenericSessionBuilder, SessionBuilderKind};
 use crate::transport::{ClusterData, NodeRef};
-use crate::{CachingSession, ExecutionProfile, Session};
+use crate::{CachingSession, Session};
 use std::sync::Arc;
 use std::{num::NonZeroU32, time::Duration};
 use std::{
@@ -144,7 +144,7 @@ fn apply_ddl_lbp(query: &mut Query) {
     let policy = query
         .get_execution_profile_handle()
         .map(|profile| profile.pointee_to_builder())
-        .unwrap_or(ExecutionProfile::builder())
+        .unwrap_or_default()
         .load_balancing_policy(Arc::new(SchemaQueriesLBP))
         .build();
     query.set_execution_profile_handle(Some(policy.into_handle()));

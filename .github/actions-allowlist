@@ -1,0 +1,6 @@
+# GitHub Actions allowlist: entries the SHA-pin guard accepts as exceptions.
+#
+# Format: one entry per line, `owner/repo@ref  # justification`.
+# Read by .github/scripts/check-actions-pinned.sh (the `guard` job in ci.yml).
+#
+# Currently empty: every action is pinned to a 40-char SHA.

@@ -373,13 +373,13 @@ mod deserialize {
             if !datacenters.contains_key(&default_context.datacenter_name) {
                 return Err(CloudConfigError::Validation(format!(
                     "context {} datacenter points to unknown datacenter.",
-                    &config.currentContext
+                    config.currentContext
                 )));
             }
             if !auth_infos.contains_key(&default_context.auth_info_name) {
                 return Err(CloudConfigError::Validation(format!(
                     "context {} authInfo points to unknown authInfo.",
-                    &config.currentContext
+                    config.currentContext
                 )));
             }
 
@@ -446,25 +446,25 @@ mod deserialize {
             if node_domain.len() > NODE_DOMAIN_MAX_LENGTH {
                 return Err(CloudConfigError::Validation(format!(
                     "Subdomain name too long (max {} ): {}",
-                    NODE_DOMAIN_MAX_LENGTH, &node_domain
+                    NODE_DOMAIN_MAX_LENGTH, node_domain
                 )));
             }
             if node_domain.contains(' ') {
                 return Err(CloudConfigError::Validation(format!(
                     "nodeDomain {} cannot contains spaces.",
-                    &node_domain
+                    node_domain
                 )));
             }
             if node_domain.starts_with('.') || node_domain.ends_with('.') {
                 return Err(CloudConfigError::Validation(format!(
                     "nodeDomain {} cannot start or end with a dot.",
-                    &node_domain
+                    node_domain
                 )));
             }
             if node_domain.ends_with('-') {
                 return Err(CloudConfigError::Validation(format!(
                     "nodeDomain {} cannot end with a minus sign.",
-                    &node_domain
+                    node_domain
                 )));
             }
 
@@ -473,7 +473,7 @@ mod deserialize {
                 if component.is_empty() {
                     return Err(CloudConfigError::Validation(format!(
                         "nodeDomain {} cannot have empty components between dots.",
-                        &node_domain
+                        node_domain
                     )));
                 }
 
@@ -481,7 +481,7 @@ mod deserialize {
                     return Err(CloudConfigError::Validation(format!(
                         "nodeDomain {} components can have minus sign only as interior character,\
                             which component {} disobeys.",
-                        &node_domain, component,
+                        node_domain, component,
                     )));
                 }
 
@@ -489,7 +489,7 @@ mod deserialize {
                     if !c.is_alphanumeric() && c != '-' {
                         return Err(CloudConfigError::Validation(format!(
                             "nodeDomain {} contains illegal character: {}.",
-                            &node_domain, c
+                            node_domain, c
                         )));
                     }
                 }
@@ -500,13 +500,13 @@ mod deserialize {
             let server = Url::try_from(server_with_protocol.as_str()).map_err(|url_error| {
                 CloudConfigError::Validation(format!(
                     "server property {} is not a valid URL: {}",
-                    &datacenter.server, url_error
+                    datacenter.server, url_error
                 ))
             })?;
             server.port().ok_or_else(|| {
                 CloudConfigError::Validation(format!(
                     "server property {} does not contain a port.",
-                    &datacenter.server
+                    datacenter.server
                 ))
             })?;
 

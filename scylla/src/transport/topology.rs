@@ -660,7 +660,7 @@ impl MetadataReader {
         self.known_peers = metadata
             .peers
             .iter()
-            .filter(|peer| host_filter.map_or(true, |f| f.accept(peer)))
+            .filter(|peer| host_filter.is_none_or(|f| f.accept(peer)))
             .map(|peer| UntranslatedEndpoint::Peer(peer.to_peer_endpoint()))
             .collect();
 
@@ -686,12 +686,12 @@ impl MetadataReader {
             .iter()
             .find(|peer| matches!(self.control_connection_endpoint, UntranslatedEndpoint::Peer(PeerEndpoint{address, ..}) if address == peer.address));
         if let Some(peer) = control_connection_peer {
-            if !self.host_filter.as_ref().map_or(true, |f| f.accept(peer)) {
+            if !self.host_filter.as_ref().is_none_or(|f| f.accept(peer)) {
                 warn!(
                     filtered_node_ips = ?metadata
                         .peers
                         .iter()
-                        .filter(|peer| self.host_filter.as_ref().map_or(true, |p| p.accept(peer)))
+                        .filter(|peer| self.host_filter.as_ref().is_none_or(|p| p.accept(peer)))
                         .map(|peer| peer.address)
                         .collect::<Vec<_>>(),
                     control_connection_address = ?self.control_connection_endpoint.address(),
@@ -1102,7 +1102,7 @@ async fn query_user_defined_types(
 
         let mut fields = Vec::with_capacity(field_names.len());
 
-        for (field_name, field_type) in field_names.into_iter().zip(field_types.into_iter()) {
+        for (field_name, field_type) in field_names.into_iter().zip(field_types) {
             let cql_type = field_type.into_cql_type(&keyspace_name, &udts);
             fields.push((field_name, cql_type));
         }
@@ -1657,7 +1657,7 @@ fn parse_native_type(p: ParserState) -> ParseResult<(NativeType, ParserState)> {
     Ok((typ, p))
 }
 
-fn parse_user_defined_type(p: ParserState) -> ParseResult<(&str, ParserState)> {
+fn parse_user_defined_type(p: ParserState<'_>) -> ParseResult<(&str, ParserState<'_>)> {
     // Java identifiers allow letters, underscores and dollar signs at any position
     // and digits in non-first position. Dots are accepted here because the names
     // are usually fully qualified.

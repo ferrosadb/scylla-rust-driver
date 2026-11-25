@@ -75,7 +75,7 @@ impl<'res> ColumnSpecView<'res> {
 
     /// The column's CQL type.
     #[inline]
-    pub fn typ(&self) -> &'res ColumnType {
+    pub fn typ(&self) -> &'res ColumnType<'_> {
         self.typ
     }
 }
@@ -355,7 +355,7 @@ impl QueryRowsResult {
 
     /// Returns column specifications.
     #[inline]
-    pub fn column_specs(&self) -> ColumnSpecs {
+    pub fn column_specs(&self) -> ColumnSpecs<'_> {
         ColumnSpecs::new(self.raw_rows_with_metadata.metadata().col_specs())
     }
 

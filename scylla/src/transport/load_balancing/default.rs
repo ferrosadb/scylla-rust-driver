@@ -2849,7 +2849,7 @@ mod latency_awareness {
                 | QueryError::DbError(DbError::IsBootstrapping, _)
                 | QueryError::DbError(DbError::Unavailable { .. }, _)
                 | QueryError::DbError(DbError::Unprepared { .. }, _)
-                | QueryError::DbError(DbError::Overloaded { .. }, _)
+                | QueryError::DbError(DbError::Overloaded, _)
                 | QueryError::DbError(DbError::RateLimitReached { .. }, _) => false,
 
                 // "slow" errors, i.e. ones that are returned after considerable time of query being run

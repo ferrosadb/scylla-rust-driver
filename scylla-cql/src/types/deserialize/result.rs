@@ -176,7 +176,7 @@ impl RawRowLendingIterator {
     /// continue.
     #[inline]
     #[allow(clippy::should_implement_trait)] // https://github.com/rust-lang/rust-clippy/issues/5004
-    pub fn next(&mut self) -> Option<Result<ColumnIterator, DeserializationError>> {
+    pub fn next(&mut self) -> Option<Result<ColumnIterator<'_, '_>, DeserializationError>> {
         self.remaining = self.remaining.checked_sub(1)?;
 
         // First create the slice encompassing the whole frame.

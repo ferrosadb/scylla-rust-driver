@@ -6,6 +6,7 @@ mod cql_types;
 mod cql_value;
 mod default_policy;
 mod execution_profiles;
+mod ferrosa;
 mod history;
 mod hygiene;
 mod large_batch_statements;

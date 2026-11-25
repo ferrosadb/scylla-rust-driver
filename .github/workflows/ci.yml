@@ -1,0 +1,258 @@
+name: CI
+
+# ferrosadb's fork of scylla-rust-driver. ferrosa-memory and ferrosa-installer
+# pin revisions of the ferrosa/* branches, so every PR to those branches (and
+# to main, our fork of upstream's 1.x line) must compile, lint and test here.
+#
+# Why this file exists: upstream's rust.yml only triggers on PRs to `main` and
+# `branch-*`. A PR to `ferrosa/0.15` matched neither filter, so it got no build
+# or test at all; the only checks that ran were pull_request_target workflows
+# read from the default branch (Semver checks, Sync Jira).
+#
+# Where these jobs run: GitHub-hosted runners. This repository is public, and
+# Ferrosa's rule for public repos is hosted runners only: fork pull requests
+# run here, and fork code must never reach Ferrosa's self-hosted machines.
+# Hosted minutes are free for public repositories.
+on:
+  push:
+    branches: [main, 'ferrosa/**']
+  pull_request:
+    branches: [main, 'ferrosa/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  # Same toolchain as ferrosa-memory, which builds this crate.
+  RUST_TOOLCHAIN: "1.98.0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  guard:
+    name: Verify SHA pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Every action is SHA-pinned
+        run: bash .github/scripts/check-actions-pinned.sh
+
+  lint-build-test:
+    name: Format, clippy, build, unit and doc tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04-25
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Save from the long-lived branches only; a PR-scoped cache can never
+          # be restored by another ref and only evicts the useful ones.
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Format check
+        run: cargo fmt --all -- --check
+      # The features our products enable: ferrosa-memory uses `ssl`; chrono
+      # support (`chrono-04`) is checked both off and on, because PR #7 makes
+      # chrono optional and both shapes must stay warning-free.
+      - name: Clippy (ssl, chrono-04 off)
+        run: cargo clippy --workspace --all-targets --features scylla/ssl -- -D warnings
+      - name: Clippy (ssl, chrono-04 on)
+        run: cargo clippy --workspace --all-targets --features scylla/ssl,scylla/chrono-04 -- -D warnings
+      - name: Build (all targets, examples and benches)
+        run: cargo build --workspace --all-targets --features scylla/ssl,scylla/chrono-04
+      # Unit tests that need no server. scylla's own lib tests mostly open a
+      # session, so they run in the `integration` job against a ferrosa node.
+      - name: Unit tests (scylla-cql, scylla-macros)
+        run: cargo test -p scylla-cql -p scylla-macros --features scylla-cql/full-serialization --lib
+      - name: Doc tests
+        run: cargo test --workspace --features scylla/ssl,scylla/full-serialization --doc
+
+  semver:
+    name: Semver check against the base
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04-25
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-semver-checks@0.51.0
+      # Blocking, with no label involved. A deliberate API break passes by
+      # bumping the crate version in the same PR (for 0.x, the minor):
+      # cargo-semver-checks derives the allowed change from the version delta.
+      - name: cargo semver-checks (scylla, scylla-cql)
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            *) base="$(git rev-parse HEAD~1)" ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "::notice::no base commit for this $EVENT (a new branch); nothing to compare against"
+            exit 0
+          fi
+          git cat-file -e "$base^{commit}" || { echo "::error::base $base is not in this clone"; exit 1; }
+          echo "baseline: $base"
+          cargo semver-checks -p scylla -p scylla-cql --baseline-rev "$base"
+
+  # Against a real ferrosa node: the server our products talk to.
+  # See .github/scripts/ferrosa-integration.sh.
+  integration:
+    name: Integration tests against a ferrosa node
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      # ferrosa's PUBLIC release image (Dockerfile.release: ENTRYPOINT ferrosa,
+      # configured by FERROSA_* env), built nightly from main. Pulls
+      # anonymously, so fork PRs can run this job too.
+      FERROSA_IMAGE: ghcr.io/ferrosadb/ferrosa:nightly
+      # Read at COMPILE time (option_env!) by the CDC-partitioner tests, which
+      # then skip their Scylla-only CDC half, as upstream's Cassandra run does.
+      CDC: disabled
+      CI_NAME: scyci-${{ github.run_id }}-${{ github.run_attempt }}
+      # Ubuntu 24.04 like the runner host, so host-built test binaries (glibc
+      # only: they are built without `ssl`) run inside it. Ours, by digest.
+      CI_BOX_IMAGE: downloads.ferrosa.ai/ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+      # Tests that need a Scylla-only feature. SCOPE, not a waiver: ferrosa
+      # speaks Cassandra's protocol and does not implement these.
+      # One exact test path per line, then `#` and the reason.
+      SCYLLA_ONLY_TESTS: |
+        shards::test_consistent_shard_awareness                    # Scylla shard-per-core routing; ferrosa has no shards
+        transport::connection_pool::tests::many_connections         # Scylla shard-aware port (19042); ferrosa has none
+        tablets::test_default_policy_is_tablet_aware                # Scylla tablets
+        tablets::test_tablet_feedback_not_sent_for_unprepared_queries  # Scylla tablets
+        lwt_optimisation::if_lwt_optimisation_mark_offered_then_negotiatied_and_lwt_routed_optimally  # Scylla LWT_ADD_METADATA_MARK extension
+        transport::connection::tests::test_lwt_optimisation_mark_negotiation  # Scylla LWT_ADD_METADATA_MARK extension
+      # Tests that need three DISTINCT nodes: they make one or two proxies
+      # fail and expect the driver to retry or speculate on a healthy third.
+      # Against one node every proxy maps to the same server, so the driver
+      # sees a single node. SCOPE of a one-node job; running a 3-node ferrosa
+      # cluster here is tracked on the Forge board.
+      MULTI_NODE_TESTS: |
+        retries::retries_occur                                      # needs a healthy third node to retry on
+        retries::speculative_execution_is_fired                     # needs another node to speculate to
+      # Standard CQL that ferrosa does not yet do the way Cassandra does.
+      # DEBT, not scope: each is a ferrosa gap tracked on the Forge board.
+      # Upstream's own Cassandra run skips only two tests
+      # (test_views_in_schema_info, test_large_batch_statements).
+      FERROSA_GAP_TESTS: |
+        transport::session_test::test_views_in_schema_info          # materialized views not supported
+        large_batch_statements::test_large_batch_statements         # BATCH capped at 500 statements
+        transport::session_test::test_tracing                       # query tracing not supported
+        transport::session_test::test_iter_methods_with_modification_statements  # query tracing not supported
+        transport::session_test::test_token_awareness               # query tracing not supported
+        transport::session_test::test_unprepared_reprepare_in_batch # ALTER TABLE ... RENAME not supported
+        transport::session_test::test_unprepared_reprepare_in_execute  # ALTER TABLE ... RENAME not supported
+        transport::session_test::test_unprepared_reprepare_in_caching_session_execute  # ALTER TABLE ... RENAME not supported
+        transport::session_test::test_prepared_statement            # keyspace-qualified token() rejected
+        transport::session_test::test_token_calculation             # keyspace-qualified token() rejected
+        transport::session_test::test_batch_lwts                    # conditional BATCH returns Void, not [applied] rows
+        transport::session_test::test_batch_to_multiple_tables      # prepared batch column count mismatch
+        transport::session_test::test_timestamp                     # USING TIMESTAMP / writetime result shape
+        transport::caching_session::tests::test_parameters_caching  # writetime result shape
+        transport::session_test::test_column_kinds_in_metadata      # schema metadata: static column reported Regular
+        transport::session_test::test_schema_types_in_metadata      # schema metadata differs from Cassandra
+        transport::session_test::test_user_defined_types_in_metadata  # schema metadata differs from Cassandra
+        transport::session_test::test_keyspaces_to_fetch            # schema metadata differs from Cassandra
+        transport::session_test::test_turning_off_schema_fetching   # schema metadata differs from Cassandra
+        transport::session_test::test_iter_works_when_retry_policy_returns_ignore_write_error  # CL=ALL write not rejected on one node
+        cql_collections::test_cql_tuple                             # tuple cell reads back as corrupt
+        cql_types::test_cql_date                                    # date literals out of range
+        cql_types::test_date_03                                     # date literals out of range
+        cql_types::test_naive_date_04                               # date literals out of range
+        cql_types::test_cql_time                                    # time literals
+        cql_types::test_cql_timestamp                               # integer timestamp literals
+        cql_types::test_date_time_04                                # integer timestamp literals
+        cql_types::test_offset_date_time_03                         # integer timestamp literals
+        cql_types::test_varint03                                    # varint from float-looking literal
+        cql_types::test_varint04                                    # varint from float-looking literal
+        cql_types::test_decimal                                     # decimal round trip differs
+        cql_types::test_empty                                       # blobAsInt() missing
+        cql_types::test_timeuuid_ordering                           # timeuuid clustering order
+        cql_value::test_cqlvalue_duration                           # negative duration literal
+        skip_metadata_optimization::test_skip_result_metadata       # SKIP_METADATA request flag not honoured (no NO_METADATA in result)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04-25
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Build the test binaries
+        run: |
+          set -euo pipefail
+          cargo test -p scylla -p scylla-proxy --features scylla/full-serialization --no-run --message-format=json \
+            | python3 -c 'import sys,json
+          for l in sys.stdin:
+              try: m=json.loads(l)
+              except ValueError: continue
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["profile"]["test"]:
+                  print(m["target"]["name"], m["executable"])' > "$RUNNER_TEMP/test-binaries.txt"
+          cat "$RUNNER_TEMP/test-binaries.txt"
+          [ -s "$RUNNER_TEMP/test-binaries.txt" ] || { echo "::error::no test binaries were built"; exit 1; }
+      - name: Pull the ferrosa node image
+        run: |
+          set -euo pipefail
+          retry() { local n=0; until "$@"; do n=$((n + 1)); [ "$n" -ge 5 ] && return 1; echo "retry ${n}/5 in 5s..."; sleep 5; done; }
+          retry docker pull "$FERROSA_IMAGE" || { echo "::error::could not pull $FERROSA_IMAGE"; exit 1; }
+          docker tag "$FERROSA_IMAGE" "ferrosa-node:$CI_NAME"
+          # The tag moves nightly; the digest says exactly which build was tested.
+          echo "::notice::ferrosa node: $(docker image inspect -f '{{index .RepoDigests 0}}' "$FERROSA_IMAGE")"
+          docker run --rm --entrypoint ferrosa "$FERROSA_IMAGE" --version || echo "::warning::ferrosa --version failed; the digest above still identifies the build"
+          retry docker pull "$CI_BOX_IMAGE" || { echo "::error::could not pull $CI_BOX_IMAGE"; exit 1; }
+      - name: Run the tests against the node
+        run: bash .github/scripts/ferrosa-integration.sh "$RUNNER_TEMP/test-binaries.txt"
+      - name: Node log (tail)
+        if: always()
+        run: docker logs --tail 200 "$CI_NAME-node" 2>&1 || echo "no node container"
+      - name: Teardown
+        if: always()
+        run: bash .github/scripts/ferrosa-integration.sh --teardown
+
+  ci-pass:
+    name: CI Pass
+    if: always()
+    needs: [guard, lint-build-test, semver, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every required job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | python3 -c 'import sys,json
+          bad={k:v["result"] for k,v in json.load(sys.stdin).items() if v["result"]!="success"}
+          if bad:
+              print("::error::required jobs did not succeed: %s" % bad); sys.exit(1)
+          print("all required jobs succeeded")'
