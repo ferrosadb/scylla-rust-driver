@@ -121,23 +121,20 @@ jobs:
           echo "baseline: $base"
           cargo semver-checks -p scylla -p scylla-cql --baseline-rev "$base"
 
-  # Against a real ferrosa node: the server our products talk to. NOT part of
-  # ci-pass yet: its skip lists were first measured on macOS and are being
-  # confirmed on Linux, and the node image (ghcr.io/ferrosadb/ferrosa-test-node)
-  # is a private package that this repository's GITHUB_TOKEN can pull only if
-  # the package grants it read access. See .github/scripts/ferrosa-integration.sh.
+  # Against a real ferrosa node: the server our products talk to.
+  # See .github/scripts/ferrosa-integration.sh.
   integration:
     name: Integration tests against a ferrosa node
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: read # ghcr.io/ferrosadb/ferrosa-test-node
     defaults:
       run:
         shell: bash
     env:
-      FERROSA_IMAGE: ghcr.io/ferrosadb/ferrosa-test-node
+      # ferrosa's PUBLIC release image (Dockerfile.release: ENTRYPOINT ferrosa,
+      # configured by FERROSA_* env), built nightly from main. Pulls
+      # anonymously, so fork PRs can run this job too.
+      FERROSA_IMAGE: ghcr.io/ferrosadb/ferrosa:nightly
       CI_NAME: scyci-${{ github.run_id }}-${{ github.run_attempt }}
       # Ubuntu 24.04 like the runner host, so host-built test binaries (glibc
       # only: they are built without `ssl`) run inside it. Ours, by digest.
@@ -211,21 +208,16 @@ jobs:
                   print(m["target"]["name"], m["executable"])' > "$RUNNER_TEMP/test-binaries.txt"
           cat "$RUNNER_TEMP/test-binaries.txt"
           [ -s "$RUNNER_TEMP/test-binaries.txt" ] || { echo "::error::no test binaries were built"; exit 1; }
-      - name: Resolve and pull the ferrosa node image
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the ferrosa node image
         run: |
           set -euo pipefail
-          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          out="$(mktemp)"
-          .github/scripts/resolve-ferrosa-image --image "$FERROSA_IMAGE" --github-output "$out"
-          sha="$(sed -n 's/^sha=//p' "$out")"
-          [ -n "$sha" ] || { echo "::error::resolve-ferrosa-image wrote no sha"; exit 1; }
-          docker pull "$FERROSA_IMAGE:$sha"
-          docker tag "$FERROSA_IMAGE:$sha" "ferrosa-node:$CI_NAME"
-          docker rmi "$FERROSA_IMAGE:$sha" >/dev/null
-          echo "::notice::ferrosa node: $FERROSA_IMAGE:$sha"
-          docker pull "$CI_BOX_IMAGE"
+          retry() { local n=0; until "$@"; do n=$((n + 1)); [ "$n" -ge 5 ] && return 1; echo "retry ${n}/5 in 5s..."; sleep 5; done; }
+          retry docker pull "$FERROSA_IMAGE" || { echo "::error::could not pull $FERROSA_IMAGE"; exit 1; }
+          docker tag "$FERROSA_IMAGE" "ferrosa-node:$CI_NAME"
+          # The tag moves nightly; the digest says exactly which build was tested.
+          echo "::notice::ferrosa node: $(docker image inspect -f '{{index .RepoDigests 0}}' "$FERROSA_IMAGE")"
+          docker run --rm --entrypoint ferrosa "$FERROSA_IMAGE" --version || echo "::warning::ferrosa --version failed; the digest above still identifies the build"
+          retry docker pull "$CI_BOX_IMAGE" || { echo "::error::could not pull $CI_BOX_IMAGE"; exit 1; }
       - name: Run the tests against the node
         run: bash .github/scripts/ferrosa-integration.sh "$RUNNER_TEMP/test-binaries.txt"
       - name: Node log (tail)
