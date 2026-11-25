@@ -7,8 +7,9 @@ use std::{
     time::SystemTime,
 };
 
-use crate::{retry_policy::RetryDecision, transport::errors::QueryError};
-use chrono::{DateTime, Utc};
+use crate::{
+    retry_policy::RetryDecision, transport::errors::QueryError, utils::pretty::TimePointDisplayer,
+};
 
 use tracing::warn;
 
@@ -67,7 +68,7 @@ pub trait HistoryListener: Debug + Send + Sync {
     );
 }
 
-pub type TimePoint = DateTime<Utc>;
+pub type TimePoint = SystemTime;
 
 /// HistoryCollector can be used as HistoryListener to collect all the query history events.
 /// Each event is marked with an UTC timestamp.
@@ -106,7 +107,7 @@ impl HistoryCollectorData {
     }
 
     fn add_event(&mut self, event: HistoryEvent) {
-        let event_time: TimePoint = SystemTime::now().into();
+        let event_time: TimePoint = SystemTime::now();
         self.events.push((event, event_time));
     }
 }
@@ -399,23 +400,31 @@ impl Display for StructuredHistory {
         writeln!(f, "Queries History:")?;
         for (i, query) in self.queries.iter().enumerate() {
             writeln!(f, "=== Query #{} ===", i)?;
-            writeln!(f, "| start_time: {}", query.start_time)?;
+            writeln!(f, "| start_time: {}", TimePointDisplayer(query.start_time))?;
             writeln!(f, "| Non-speculative attempts:")?;
             write_fiber_attempts(&query.non_speculative_fiber, f)?;
             for (spec_i, speculative_fiber) in query.speculative_fibers.iter().enumerate() {
                 writeln!(f, "|")?;
                 writeln!(f, "|")?;
                 writeln!(f, "| > Speculative fiber #{}", spec_i)?;
-                writeln!(f, "| fiber start time: {}", speculative_fiber.start_time)?;
+                writeln!(
+                    f,
+                    "| fiber start time: {}",
+                    TimePointDisplayer(speculative_fiber.start_time)
+                )?;
                 write_fiber_attempts(speculative_fiber, f)?;
             }
             writeln!(f, "|")?;
             match &query.result {
                 Some(QueryHistoryResult::Success(succ_time)) => {
-                    writeln!(f, "| Query successful at {}", succ_time)?;
+                    writeln!(
+                        f,
+                        "| Query successful at {}",
+                        TimePointDisplayer(*succ_time)
+                    )?;
                 }
                 Some(QueryHistoryResult::Error(err_time, error)) => {
-                    writeln!(f, "| Query failed at {}", err_time)?;
+                    writeln!(f, "| Query failed at {}", TimePointDisplayer(*err_time))?;
                     writeln!(f, "| Error: {}", error)?;
                 }
                 None => writeln!(f, "| Query still running - no final result yet")?,
@@ -432,11 +441,17 @@ fn write_fiber_attempts(fiber: &FiberHistory, f: &mut std::fmt::Formatter<'_>) -
             writeln!(f, "|")?;
         }
         writeln!(f, "| - Attempt #{} sent to {}", i, attempt.node_addr)?;
-        writeln!(f, "|   request send time: {}", attempt.send_time)?;
+        writeln!(
+            f,
+            "|   request send time: {}",
+            TimePointDisplayer(attempt.send_time)
+        )?;
         match &attempt.result {
-            Some(AttemptResult::Success(time)) => writeln!(f, "|   Success at {}", time)?,
+            Some(AttemptResult::Success(time)) => {
+                writeln!(f, "|   Success at {}", TimePointDisplayer(*time))?
+            }
             Some(AttemptResult::Error(time, err, retry_decision)) => {
-                writeln!(f, "|   Error at {}", time)?;
+                writeln!(f, "|   Error at {}", TimePointDisplayer(*time))?;
                 writeln!(f, "|   Error: {}", err)?;
                 writeln!(f, "|   Retry decision: {:?}", retry_decision)?;
             }
@@ -462,21 +477,28 @@ mod tests {
         SpeculativeId, StructuredHistory, TimePoint,
     };
     use assert_matches::assert_matches;
-    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use scylla_cql::Consistency;
+    use std::time::{Duration, UNIX_EPOCH};
 
     // Set a single time for all timestamps within StructuredHistory.
     // HistoryCollector sets the timestamp to current time which changes with each test.
     // Setting it to one makes it possible to test displaying consistently.
-    fn set_one_time(mut history: StructuredHistory) -> StructuredHistory {
-        let the_time: TimePoint = DateTime::<Utc>::from_naive_utc_and_offset(
-            NaiveDateTime::new(
-                NaiveDate::from_ymd_opt(2022, 2, 22).unwrap(),
-                NaiveTime::from_hms_opt(20, 22, 22).unwrap(),
-            ),
-            Utc,
-        );
+    fn set_one_time(history: StructuredHistory) -> StructuredHistory {
+        // 2022-02-22 20:22:22 UTC
+        set_time(history, time_point(1_645_561_342, 0))
+    }
 
+    fn time_point(unix_secs: i64, nanos: u32) -> TimePoint {
+        let whole = Duration::from_secs(unix_secs.unsigned_abs());
+        let at_second = if unix_secs >= 0 {
+            UNIX_EPOCH + whole
+        } else {
+            UNIX_EPOCH - whole
+        };
+        at_second + Duration::from_nanos(nanos.into())
+    }
+
+    fn set_time(mut history: StructuredHistory, the_time: TimePoint) -> StructuredHistory {
         for query in &mut history.queries {
             query.start_time = the_time;
             match &mut query.result {
@@ -532,6 +554,47 @@ mod tests {
 
     fn no_stream_id_error() -> QueryError {
         QueryError::UnableToAllocStreamId
+    }
+
+    fn start_time_line(the_time: TimePoint) -> String {
+        let history_collector = HistoryCollector::new();
+        let _query_id: QueryId = history_collector.log_query_start();
+        let history = set_time(history_collector.clone_structured_history(), the_time);
+        format!("{}", history)
+            .lines()
+            .find(|line| line.starts_with("| start_time: "))
+            .unwrap()
+            .to_owned()
+    }
+
+    // Pinned from chrono's `DateTime<Utc>` Display before `TimePoint` became
+    // `SystemTime`: the fraction is omitted when zero and otherwise printed
+    // at millisecond, microsecond or nanosecond width, whichever is exact.
+    #[test]
+    fn time_point_display_is_pinned() {
+        setup_tracing();
+        let at = |secs, nanos| start_time_line(time_point(secs, nanos));
+        assert_eq!(
+            at(1_645_561_342, 0),
+            "| start_time: 2022-02-22 20:22:22 UTC"
+        );
+        assert_eq!(
+            at(1_645_561_342, 120_000_000),
+            "| start_time: 2022-02-22 20:22:22.120 UTC"
+        );
+        assert_eq!(
+            at(1_645_561_342, 123_450_000),
+            "| start_time: 2022-02-22 20:22:22.123450 UTC"
+        );
+        assert_eq!(
+            at(1_645_561_342, 1),
+            "| start_time: 2022-02-22 20:22:22.000000001 UTC"
+        );
+        assert_eq!(at(0, 0), "| start_time: 1970-01-01 00:00:00 UTC");
+        assert_eq!(
+            at(-1, 999_999_999),
+            "| start_time: 1969-12-31 23:59:59.999999999 UTC"
+        );
     }
 
     #[test]
