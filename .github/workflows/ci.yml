@@ -152,6 +152,14 @@ jobs:
         tablets::test_tablet_feedback_not_sent_for_unprepared_queries  # Scylla tablets
         lwt_optimisation::if_lwt_optimisation_mark_offered_then_negotiatied_and_lwt_routed_optimally  # Scylla LWT_ADD_METADATA_MARK extension
         transport::connection::tests::test_lwt_optimisation_mark_negotiation  # Scylla LWT_ADD_METADATA_MARK extension
+      # Tests that need three DISTINCT nodes: they make one or two proxies
+      # fail and expect the driver to retry or speculate on a healthy third.
+      # Against one node every proxy maps to the same server, so the driver
+      # sees a single node. SCOPE of a one-node job; running a 3-node ferrosa
+      # cluster here is tracked on the Forge board.
+      MULTI_NODE_TESTS: |
+        retries::retries_occur                                      # needs a healthy third node to retry on
+        retries::speculative_execution_is_fired                     # needs another node to speculate to
       # Standard CQL that ferrosa does not yet do the way Cassandra does.
       # DEBT, not scope: each is a ferrosa gap tracked on the Forge board.
       # Upstream's own Cassandra run skips only two tests
@@ -191,6 +199,7 @@ jobs:
         cql_types::test_empty                                       # blobAsInt() missing
         cql_types::test_timeuuid_ordering                           # timeuuid clustering order
         cql_value::test_cqlvalue_duration                           # negative duration literal
+        skip_metadata_optimization::test_skip_result_metadata       # SKIP_METADATA request flag not honoured (no NO_METADATA in result)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-04-25
@@ -233,7 +242,7 @@ jobs:
   ci-pass:
     name: CI Pass
     if: always()
-    needs: [guard, lint-build-test, semver]
+    needs: [guard, lint-build-test, semver, integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

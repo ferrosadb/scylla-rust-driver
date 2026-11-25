@@ -20,8 +20,8 @@
 # The box runs the binaries built on the host, as the runner's uid, with the
 # workspace and the (symlinked) target dir mounted at the same paths.
 #
-# Skip lists come from the workflow: SCYLLA_ONLY_TESTS (scope) and
-# FERROSA_GAP_TESTS (debt). One exact test path per line, `# reason` required.
+# Skip lists come from the workflow: SCYLLA_ONLY_TESTS and MULTI_NODE_TESTS
+# (scope) and FERROSA_GAP_TESTS (debt). One exact test path per line, `# reason` required.
 # A listed test that no binary contains fails the run: a stale skip would
 # otherwise skip nothing and say nothing.
 set -euo pipefail
@@ -73,6 +73,7 @@ parse_list() {
   done <<< "$text"
 }
 parse_list scylla-only "${SCYLLA_ONLY_TESTS:-}"
+parse_list multi-node "${MULTI_NODE_TESTS:-}"
 parse_list ferrosa-gap "${FERROSA_GAP_TESTS:-}"
 
 # Every skip must name a real test.
